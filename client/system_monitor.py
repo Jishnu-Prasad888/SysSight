@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Enhanced System Monitoring Agent
+Enhanced System Monitoring Agent with Built-in Installer
 Collects system information and sends encrypted data to central server periodically
 """
 
@@ -8,19 +8,27 @@ import os
 import sys
 import time
 import json
-import psutil
-import requests
 import socket
 import subprocess
 import threading
 import base64
 import getpass
+import shutil
 from datetime import datetime
 from collections import defaultdict
 import logging
-from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from pathlib import Path
+
+# Try to import required modules, prompt for installation if missing
+try:
+    import psutil
+    import requests
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    DEPENDENCIES_INSTALLED = True
+except ImportError:
+    DEPENDENCIES_INSTALLED = False
 
 # Configuration
 CONFIG = {
@@ -30,19 +38,250 @@ CONFIG = {
     'max_retries': 3,
     'timeout': 10,
     'batch_size': 50,
+    'install_dir': '/opt/system_monitor',
     'config_file': '/etc/system_monitor/config.json',
-    'key_file': '/etc/system_monitor/key.key'
+    'key_file': '/etc/system_monitor/key.key',
+    'log_file': '/var/log/system_monitor/system_monitor.log',
+    'venv_dir': '/opt/system_monitor/venv'
 }
 
 # Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('/var/log/system_monitor.log'),
-        logging.StreamHandler()
-    ]
-)
+def setup_logging():
+    log_dir = os.path.dirname(CONFIG['log_file'])
+    if not os.path.exists(log_dir):
+        try:
+            os.makedirs(log_dir, mode=0o755, exist_ok=True)
+        except:
+            CONFIG['log_file'] = 'system_monitor.log'
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(CONFIG['log_file']),
+            logging.StreamHandler()
+        ]
+    )
+
+class Installer:
+    """Handles installation of the monitoring agent"""
+    
+    @staticmethod
+    def check_python():
+        """Check if Python 3 is available"""
+        if sys.version_info < (3, 6):
+            print("❌ Python 3.6+ is required")
+            return False
+        print(f"✅ Python {sys.version_info.major}.{sys.version_info.minor} detected")
+        return True
+    
+    @staticmethod
+    def check_root():
+        """Check if running as root"""
+        if os.geteuid() != 0:
+            print("⚠️  WARNING: Not running as root/sudo")
+            print("   Installation requires root privileges for:")
+            print("   - Creating system directories")
+            print("   - Installing systemd service")
+            print("   - Full monitoring capabilities")
+            response = input("\nContinue anyway? (y/N): ").lower()
+            return response == 'y'
+        return True
+    
+    @staticmethod
+    def install_dependencies():
+        """Install required Python packages"""
+        print("\n--- Installing Dependencies ---")
+        
+        requirements = [
+            'psutil>=5.8.0',
+            'requests>=2.25.0',
+            'cryptography>=3.4.0'
+        ]
+        
+        try:
+            # Check if we should use venv
+            use_venv = os.path.exists(CONFIG['venv_dir']) or os.geteuid() == 0
+            
+            if use_venv and not os.path.exists(CONFIG['venv_dir']):
+                print(f"Creating virtual environment at {CONFIG['venv_dir']}...")
+                os.makedirs(os.path.dirname(CONFIG['venv_dir']), mode=0o755, exist_ok=True)
+                subprocess.run([sys.executable, '-m', 'venv', CONFIG['venv_dir']], check=True)
+                pip_executable = os.path.join(CONFIG['venv_dir'], 'bin', 'pip')
+            elif use_venv:
+                pip_executable = os.path.join(CONFIG['venv_dir'], 'bin', 'pip')
+            else:
+                pip_executable = 'pip3'
+            
+            print(f"Installing packages using {pip_executable}...")
+            for req in requirements:
+                print(f"  Installing {req}...")
+                subprocess.run([pip_executable, 'install', '-q', req], check=True)
+            
+            print("✅ Dependencies installed successfully")
+            return True
+            
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Failed to install dependencies: {e}")
+            print("\nTry installing manually:")
+            print(f"  pip3 install {' '.join(requirements)}")
+            return False
+        except Exception as e:
+            print(f"❌ Error during installation: {e}")
+            return False
+    
+    @staticmethod
+    def create_directories():
+        """Create necessary directories"""
+        print("\n--- Creating Directories ---")
+        
+        directories = [
+            (CONFIG['install_dir'], 0o755),
+            (os.path.dirname(CONFIG['config_file']), 0o700),
+            (os.path.dirname(CONFIG['log_file']), 0o755),
+        ]
+        
+        for directory, mode in directories:
+            try:
+                os.makedirs(directory, mode=mode, exist_ok=True)
+                print(f"✅ Created {directory}")
+            except Exception as e:
+                print(f"⚠️  Could not create {directory}: {e}")
+    
+    @staticmethod
+    def copy_script():
+        """Copy this script to installation directory"""
+        print("\n--- Installing Script ---")
+        
+        try:
+            script_path = os.path.abspath(__file__)
+            target_path = os.path.join(CONFIG['install_dir'], 'system_monitor.py')
+            
+            if script_path != target_path:
+                shutil.copy2(script_path, target_path)
+                os.chmod(target_path, 0o755)
+                print(f"✅ Script installed to {target_path}")
+            else:
+                print(f"✅ Script already in installation directory")
+            
+            return target_path
+        except Exception as e:
+            print(f"⚠️  Could not copy script: {e}")
+            return script_path
+    
+    @staticmethod
+    def create_systemd_service():
+        """Create systemd service file"""
+        print("\n--- Creating Systemd Service ---")
+        
+        if os.geteuid() != 0:
+            print("⚠️  Skipping systemd service (requires root)")
+            return False
+        
+        # Determine Python executable path
+        if os.path.exists(CONFIG['venv_dir']):
+            python_exec = os.path.join(CONFIG['venv_dir'], 'bin', 'python')
+        else:
+            python_exec = sys.executable
+        
+        script_path = os.path.join(CONFIG['install_dir'], 'system_monitor.py')
+        
+        service_content = f"""[Unit]
+Description=Enhanced System Monitoring Agent
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=root
+ExecStart={python_exec} {script_path}
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths={os.path.dirname(CONFIG['log_file'])} {os.path.dirname(CONFIG['config_file'])}
+
+[Install]
+WantedBy=multi-user.target
+"""
+        
+        try:
+            service_path = '/etc/systemd/system/system-monitor.service'
+            with open(service_path, 'w') as f:
+                f.write(service_content)
+            os.chmod(service_path, 0o600)
+            
+            # Reload systemd
+            subprocess.run(['systemctl', 'daemon-reload'], check=True)
+            
+            print(f"✅ Systemd service created at {service_path}")
+            return True
+        except Exception as e:
+            print(f"⚠️  Could not create systemd service: {e}")
+            return False
+    
+    @staticmethod
+    def install():
+        """Run complete installation"""
+        print("=" * 60)
+        print("  ENHANCED SYSTEM MONITORING AGENT - INSTALLER")
+        print("=" * 60)
+        
+        # Check prerequisites
+        if not Installer.check_python():
+            return False
+        
+        if not Installer.check_root():
+            return False
+        
+        # Create directories
+        Installer.create_directories()
+        
+        # Install dependencies
+        if not DEPENDENCIES_INSTALLED:
+            if not Installer.install_dependencies():
+                print("\n❌ Installation failed. Please install dependencies manually.")
+                return False
+        else:
+            print("\n✅ Dependencies already installed")
+        
+        # Copy script
+        script_path = Installer.copy_script()
+        
+        # Create systemd service
+        systemd_created = Installer.create_systemd_service()
+        
+        # Print completion message
+        print("\n" + "=" * 60)
+        print("  INSTALLATION COMPLETE")
+        print("=" * 60)
+        
+        if os.path.exists(CONFIG['venv_dir']):
+            python_cmd = f"{CONFIG['venv_dir']}/bin/python {script_path}"
+        else:
+            python_cmd = f"python3 {script_path}"
+        
+        print("\nNext steps:")
+        print(f"1. Run setup: sudo {python_cmd} setup")
+        
+        if systemd_created:
+            print("2. Start service: sudo systemctl start system-monitor")
+            print("3. Enable auto-start: sudo systemctl enable system-monitor")
+            print("4. Check logs: journalctl -u system-monitor -f")
+        else:
+            print(f"2. Run manually: sudo {python_cmd}")
+        
+        print(f"\nConfiguration will be stored in: {CONFIG['config_file']}")
+        print(f"Logs will be written to: {CONFIG['log_file']}")
+        
+        return True
+
 
 class EncryptionManager:
     def __init__(self, key_file):
@@ -116,6 +355,7 @@ class EncryptionManager:
         decrypted_data = self.fernet.decrypt(encrypted_bytes)
         return json.loads(decrypted_data.decode())
 
+
 class ConfigManager:
     def __init__(self, config_file):
         self.config_file = config_file
@@ -178,11 +418,14 @@ class ConfigManager:
         self.config = {
             'server_url': server_url,
             'username': username,
-            'password': password,  # This will be encrypted
+            'password': password,
             'monitor_all_users': monitor_all_users,
             'specific_user': specific_user,
             'interval': interval,
             'hostname': socket.gethostname(),
+            'max_retries': CONFIG['max_retries'],
+            'timeout': CONFIG['timeout'],
+            'batch_size': CONFIG['batch_size'],
             'setup_time': datetime.utcnow().isoformat()
         }
         
@@ -207,6 +450,7 @@ class ConfigManager:
         with open(self.config_file, 'w') as f:
             json.dump(self.config, f, indent=2)
         os.chmod(self.config_file, 0o600)
+
 
 class SystemMonitor:
     def __init__(self, config_manager, encryption_manager):
@@ -406,13 +650,11 @@ class SystemMonitor:
         }
         return errors
     
-    # Other collection methods (get_failed_logins, get_successful_logins, etc.)
-    # ... [Previous implementation of helper methods] ...
-    
+    # Helper methods for data collection
     def get_failed_logins(self):
         try:
             result = subprocess.run(['grep', 'Failed', '/var/log/auth.log'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -420,7 +662,7 @@ class SystemMonitor:
     def get_successful_logins(self):
         try:
             result = subprocess.run(['grep', 'Accepted', '/var/log/auth.log'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -428,7 +670,7 @@ class SystemMonitor:
     def get_user_changes(self):
         try:
             result = subprocess.run(['grep', 'useradd\\|usermod', '/var/log/auth.log'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -436,14 +678,14 @@ class SystemMonitor:
     def get_sudo_events(self):
         try:
             result = subprocess.run(['grep', 'sudo:', '/var/log/auth.log'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
     
     def get_open_ports(self):
         try:
-            result = subprocess.run(['ss', '-tuln'], capture_output=True, text=True)
+            result = subprocess.run(['ss', '-tuln'], capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -451,7 +693,7 @@ class SystemMonitor:
     def get_recently_modified_files(self):
         try:
             result = subprocess.run(['find', '/etc', '-type', 'f', '-mtime', '-1'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=10)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -459,7 +701,7 @@ class SystemMonitor:
     def get_recent_syslog(self):
         try:
             result = subprocess.run(['tail', '-50', '/var/log/syslog'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -467,28 +709,28 @@ class SystemMonitor:
     def get_recent_auth_log(self):
         try:
             result = subprocess.run(['tail', '-50', '/var/log/auth.log'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
     
     def get_selinux_status(self):
         try:
-            result = subprocess.run(['sestatus'], capture_output=True, text=True)
+            result = subprocess.run(['sestatus'], capture_output=True, text=True, timeout=5)
             return 'enabled' in result.stdout.lower()
         except:
             return False
     
     def get_firewall_status(self):
         try:
-            result = subprocess.run(['ufw', 'status'], capture_output=True, text=True)
+            result = subprocess.run(['ufw', 'status'], capture_output=True, text=True, timeout=5)
             return 'active' in result.stdout.lower()
         except:
             return False
     
     def get_connected_devices(self):
         try:
-            result = subprocess.run(['lsusb'], capture_output=True, text=True)
+            result = subprocess.run(['lsusb'], capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -498,7 +740,7 @@ class SystemMonitor:
     
     def get_scheduled_tasks(self):
         try:
-            result = subprocess.run(['crontab', '-l'], capture_output=True, text=True)
+            result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -525,14 +767,14 @@ class SystemMonitor:
     def get_dns_cache(self):
         try:
             result = subprocess.run(['systemd-resolve', '--statistics'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
     
     def get_container_count(self):
         try:
-            result = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True)
+            result = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -540,7 +782,7 @@ class SystemMonitor:
     def get_ssh_key_changes(self):
         try:
             result = subprocess.run(['grep', 'ssh-key', '/var/log/auth.log'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -548,7 +790,7 @@ class SystemMonitor:
     def get_account_lockouts(self):
         try:
             result = subprocess.run(['grep', 'account locked', '/var/log/auth.log'], 
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True, timeout=5)
             return len(result.stdout.split('\n')) - 1
         except:
             return 0
@@ -766,8 +1008,14 @@ class SystemMonitor:
         self.running = False
         logging.info("System monitor stopped")
 
+
 def setup_agent():
     """Interactive setup for the monitoring agent"""
+    if not DEPENDENCIES_INSTALLED:
+        print("❌ Dependencies are not installed.")
+        print("Please run: python3 system_monitor.py install")
+        sys.exit(1)
+    
     config_manager = ConfigManager(CONFIG['config_file'])
     encryption_manager = EncryptionManager(CONFIG['key_file'])
     
@@ -807,19 +1055,85 @@ def setup_agent():
         print(f"❌ Setup failed: {e}")
         sys.exit(1)
 
+
+def print_usage():
+    """Print usage information"""
+    print("""
+Enhanced System Monitoring Agent
+
+Usage:
+    python3 system_monitor.py [command]
+
+Commands:
+    install     - Install the monitoring agent (creates directories, installs dependencies, sets up systemd)
+    setup       - Configure the monitoring agent (server URL, credentials, monitoring scope)
+    (no args)   - Run the monitoring agent (requires prior setup)
+    help        - Show this help message
+
+Examples:
+    # First-time installation
+    sudo python3 system_monitor.py install
+    
+    # Configure the agent
+    sudo python3 system_monitor.py setup
+    
+    # Run the agent manually
+    sudo python3 system_monitor.py
+    
+    # Or use systemd (after install)
+    sudo systemctl start system-monitor
+    sudo systemctl enable system-monitor
+    sudo journalctl -u system-monitor -f
+
+Configuration:
+    Config file: {config_file}
+    Key file:    {key_file}
+    Log file:    {log_file}
+    Install dir: {install_dir}
+""".format(**CONFIG))
+
+
 def main():
     """Main entry point"""
-    if len(sys.argv) > 1 and sys.argv[1] == 'setup':
-        setup_agent()
-        return
+    
+    # Parse command line arguments
+    if len(sys.argv) > 1:
+        command = sys.argv[1].lower()
+        
+        if command == 'install':
+            success = Installer.install()
+            sys.exit(0 if success else 1)
+        
+        elif command == 'setup':
+            setup_agent()
+            return
+        
+        elif command in ['help', '-h', '--help']:
+            print_usage()
+            return
+        
+        else:
+            print(f"Unknown command: {command}")
+            print_usage()
+            sys.exit(1)
+    
+    # Check if dependencies are installed
+    if not DEPENDENCIES_INSTALLED:
+        print("❌ Required dependencies are not installed.")
+        print("\nPlease run installation first:")
+        print("  sudo python3 system_monitor.py install")
+        sys.exit(1)
+    
+    # Setup logging
+    setup_logging()
     
     # Load existing configuration
     config_manager = ConfigManager(CONFIG['config_file'])
     config = config_manager.load_config()
     
     if not config:
-        print("Configuration not found. Please run setup first:")
-        print("sudo python3 system_monitor.py setup")
+        print("❌ Configuration not found. Please run setup first:")
+        print("  sudo python3 system_monitor.py setup")
         sys.exit(1)
     
     # Initialize encryption
@@ -844,6 +1158,7 @@ def main():
         monitor.run()
     except KeyboardInterrupt:
         monitor.stop()
+
 
 if __name__ == "__main__":
     main()
