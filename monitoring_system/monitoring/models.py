@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.auth.hashers import make_password, check_password
 import json
 
 class MonitoringAgent(models.Model):
@@ -9,9 +10,21 @@ class MonitoringAgent(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
     monitoring_scope = models.CharField(max_length=50, default='all_users')
+    
+    # NEW: Store encryption credentials
+    encryption_password = models.CharField(max_length=255, null=True, blank=True)
+    encryption_salt = models.CharField(max_length=255, default='default_salt_12345')
 
     def __str__(self):
         return self.hostname
+    
+    def set_encryption_password(self, password):
+        """Store encryption password (in plain text for decryption - use secrets manager in production)"""
+        self.encryption_password = password
+    
+    def get_encryption_password(self):
+        """Get encryption password"""
+        return self.encryption_password or 'demo_password'
 
 class SystemLog(models.Model):
     agent = models.ForeignKey(MonitoringAgent, on_delete=models.CASCADE, related_name='logs')

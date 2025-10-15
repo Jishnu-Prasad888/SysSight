@@ -9,6 +9,7 @@ from .serializers import *
 from .utils import DecryptionManager, AlertGenerator
 import logging
 from datetime import datetime, timedelta
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ class MonitoringAgentViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def stats(self, request):
-        """Get agent statistics - FIXED VERSION"""
+        """Get agent statistics"""
         try:
             total_agents = MonitoringAgent.objects.count()
             active_agents = MonitoringAgent.objects.filter(is_active=True).count()
@@ -38,7 +39,6 @@ class MonitoringAgentViewSet(viewsets.ModelViewSet):
             }
             return Response(stats)
         except Exception as e:
-            # Return safe defaults if there's an error
             return Response({
                 'total_agents': 0,
                 'active_agents': 0,
@@ -51,7 +51,7 @@ class SystemLogViewSet(viewsets.ModelViewSet):
     queryset = SystemLog.objects.all().order_by('-timestamp')
     serializer_class = SystemLogSerializer
     
-    def get_queryset(self,request): # type: ignore
+    def get_queryset(self):
         queryset = super().get_queryset()
         
         # Filter by agent if provided
@@ -68,12 +68,15 @@ class SystemLogViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['post'])
     def upload_logs(self, request):
+        """Handle log uploads from monitoring agents"""
         serializer = LogUploadSerializer(data=request.data)
         if not serializer.is_valid():
+            logger.error(f"Invalid serializer data: {serializer.errors}")
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         
         try:
             data = serializer.validated_data
+            logger.info(f"Received log upload from {data['hostname']}")
             
             # Get or create agent
             agent, created = MonitoringAgent.objects.get_or_create(
@@ -88,53 +91,106 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                 agent.last_seen = timezone.now()
                 agent.save()
             
-            # Initialize decryption (in real scenario, you'd get password from secure storage)
-            # For demo, using a hardcoded password - in production, use proper key management
-            decryption_manager = DecryptionManager()
-            # You would get the password from your secure storage based on the agent
-            decryption_manager.initialize_from_password("demo_password", "demo_salt")
-            
-            # Decrypt the data
-            decrypted_data = decryption_manager.decrypt_data(data['encrypted_data'])
-            
-            # Process each log entry
-            for log_entry in decrypted_data.get('logs', []):
-                # Save system log
-                system_log = SystemLog.objects.create(
-                    agent=agent,
-                    timestamp=log_entry.get('timestamp', timezone.now()),
-                    data=log_entry
-                )
+            # Try to decrypt the data
+            decrypted_data = None
+            try:
+                decryption_manager = DecryptionManager()
                 
-                # Save user sessions
-                users_logged_in = log_entry.get('users_logged_in', {})
-                for user_data in users_logged_in.get('users', []):
-                    UserSession.objects.create(
-                        agent=agent,
-                        username=user_data['name'],
-                        terminal=user_data.get('terminal', ''),
-                        host=user_data.get('host', ''),
-                        login_time=datetime.fromtimestamp(user_data.get('started', 0)),
-                        pid=user_data.get('pid', 0)
-                    )
+                # Get encryption credentials from agent record or settings
+                password = agent.get_encryption_password()
+                salt = agent.encryption_salt
                 
-                # Generate alerts
-                alerts = AlertGenerator.generate_alerts(agent, log_entry)
-                for alert_data in alerts:
-                    Alert.objects.create(
+                logger.info(f"Attempting decryption for {agent.hostname}")
+                decryption_manager.initialize_from_password(password, salt)
+                decrypted_data = decryption_manager.decrypt_data(data['encrypted_data'])
+                logger.info("Successfully decrypted data")
+                
+            except Exception as decrypt_error:
+                logger.warning(f"Decryption failed: {decrypt_error}. Trying to parse as plain JSON.")
+                # Fallback: try to parse as plain JSON (for testing)
+                try:
+                    decrypted_data = json.loads(data['encrypted_data'])
+                    logger.info("Parsed as plain JSON")
+                except Exception as json_error:
+                    logger.error(f"JSON parse failed: {json_error}")
+                    raise ValueError(f"Could not decrypt or parse data. Decrypt error: {decrypt_error}, JSON error: {json_error}")
+            
+            if not decrypted_data:
+                raise ValueError("No data to process")
+            
+            # Process the logs
+            logs_processed = 0
+            alerts_generated = 0
+            
+            # Handle both single log and batch logs
+            if 'logs' in decrypted_data:
+                log_entries = decrypted_data['logs']
+            else:
+                log_entries = [decrypted_data]
+            
+            for log_entry in log_entries:
+                try:
+                    # Save system log
+                    timestamp = log_entry.get('timestamp')
+                    if isinstance(timestamp, str):
+                        # Handle ISO format with or without 'Z'
+                        timestamp = timestamp.replace('Z', '+00:00')
+                        timestamp = datetime.fromisoformat(timestamp)
+                    elif timestamp is None:
+                        timestamp = timezone.now()
+                    
+                    system_log = SystemLog.objects.create(
                         agent=agent,
-                        **alert_data
+                        timestamp=timestamp,
+                        data=log_entry
                     )
+                    logs_processed += 1
+                    
+                    # Save user sessions
+                    users_logged_in = log_entry.get('users_logged_in', {})
+                    if isinstance(users_logged_in, dict):
+                        for user_data in users_logged_in.get('users', []):
+                            try:
+                                login_time = user_data.get('started', 0)
+                                if isinstance(login_time, (int, float)):
+                                    login_time = datetime.fromtimestamp(login_time, tz=timezone.utc)
+                                
+                                UserSession.objects.create(
+                                    agent=agent,
+                                    username=user_data.get('name', 'unknown'),
+                                    terminal=user_data.get('terminal', 'unknown'),
+                                    host=user_data.get('host', '0.0.0.0'),
+                                    login_time=login_time,
+                                    pid=user_data.get('pid', 0)
+                                )
+                            except Exception as user_error:
+                                logger.warning(f"Error saving user session: {user_error}")
+                    
+                    # Generate alerts
+                    alerts = AlertGenerator.generate_alerts(agent, log_entry)
+                    for alert_data in alerts:
+                        Alert.objects.create(
+                            agent=agent,
+                            **alert_data
+                        )
+                    alerts_generated += len(alerts)
+                    
+                except Exception as log_error:
+                    logger.error(f"Error processing log entry: {log_error}", exc_info=True)
+                    continue
+            
+            logger.info(f"Successfully processed {logs_processed} logs, generated {alerts_generated} alerts")
             
             return Response({
                 'status': 'success',
                 'agent_id': agent.id,
-                'logs_processed': len(decrypted_data.get('logs', [])),
-                'alerts_generated': len(alerts)
+                'agent_hostname': agent.hostname,
+                'logs_processed': logs_processed,
+                'alerts_generated': alerts_generated
             })
             
         except Exception as e:
-            logger.error(f"Error processing log upload: {str(e)}")
+            logger.error(f"Error processing log upload: {str(e)}", exc_info=True)
             return Response(
                 {'error': 'Failed to process logs', 'details': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -142,12 +198,11 @@ class SystemLogViewSet(viewsets.ModelViewSet):
     
     @action(detail=False, methods=['get'])
     def metrics(self, request):
-        """Get metrics for dashboard charts - FIXED VERSION"""
+        """Get metrics for dashboard charts"""
         try:
             hours = int(request.query_params.get('hours', 24))
             time_threshold = timezone.now() - timedelta(hours=hours)
             
-            # Get basic counts instead of JSON field aggregations
             recent_logs_count = SystemLog.objects.filter(
                 timestamp__gte=time_threshold
             ).count()
@@ -155,8 +210,7 @@ class SystemLogViewSet(viewsets.ModelViewSet):
             agents_count = MonitoringAgent.objects.filter(is_active=True).count()
             alerts_count = Alert.objects.filter(resolved=False).count()
             
-            # Get some sample data for charts (you can replace this with real data later)
-            # For now, we'll return sample data since we don't have real monitoring data yet
+            # Sample data for charts
             sample_cpu_data = [
                 {'timestamp': '14:00', 'avg_cpu': 25},
                 {'timestamp': '14:05', 'avg_cpu': 30},
@@ -201,12 +255,16 @@ class SystemLogViewSet(viewsets.ModelViewSet):
             return Response(metrics)
             
         except Exception as e:
-            # Return safe sample data even if there's an error
             safe_metrics = {
                 'cpu_usage': [{'timestamp': '14:00', 'avg_cpu': 25}],
                 'memory_usage': [{'timestamp': '14:00', 'avg_memory': 60}],
                 'failed_logins': [{'hour': '14:00', 'total_failed': 0}],
                 'process_counts': [],
+                'stats': {
+                    'recent_logs_count': 0,
+                    'active_agents': 0,
+                    'active_alerts': 0,
+                },
                 'error': str(e)
             }
             return Response(safe_metrics)
