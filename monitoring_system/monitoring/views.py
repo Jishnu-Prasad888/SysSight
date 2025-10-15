@@ -6,7 +6,7 @@ from django.db.models import Count, Avg, Max, Min
 from django.db.models.functions import TruncHour
 from .models import MonitoringAgent, SystemLog, Alert, UserSession
 from .serializers import *
-from .utils import DecryptionManager, AlertGenerator
+from .utils import AlertGenerator
 import logging
 from datetime import datetime, timedelta
 import json
@@ -91,29 +91,13 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                 agent.last_seen = timezone.now()
                 agent.save()
             
-            # Try to decrypt the data
-            decrypted_data = None
+            # Parse the JSON data directly (no decryption)
             try:
-                decryption_manager = DecryptionManager()
-                
-                # Get encryption credentials from agent record or settings
-                password = agent.get_encryption_password()
-                salt = agent.encryption_salt
-                
-                logger.info(f"Attempting decryption for {agent.hostname}")
-                decryption_manager.initialize_from_password(password, salt)
-                decrypted_data = decryption_manager.decrypt_data(data['encrypted_data'])
-                logger.info("Successfully decrypted data")
-                
-            except Exception as decrypt_error:
-                logger.warning(f"Decryption failed: {decrypt_error}. Trying to parse as plain JSON.")
-                # Fallback: try to parse as plain JSON (for testing)
-                try:
-                    decrypted_data = json.loads(data['encrypted_data'])
-                    logger.info("Parsed as plain JSON")
-                except Exception as json_error:
-                    logger.error(f"JSON parse failed: {json_error}")
-                    raise ValueError(f"Could not decrypt or parse data. Decrypt error: {decrypt_error}, JSON error: {json_error}")
+                decrypted_data = json.loads(data['encrypted_data'])
+                logger.info("Successfully parsed JSON data")
+            except Exception as json_error:
+                logger.error(f"JSON parse failed: {json_error}")
+                raise ValueError(f"Could not parse JSON data: {json_error}")
             
             if not decrypted_data:
                 raise ValueError("No data to process")
