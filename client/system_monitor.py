@@ -417,7 +417,7 @@ class SystemMonitor:
                 user_info = {
                     'name': user.name,
                     'terminal': user.terminal,
-                    'host': user.host,
+                    'host': self.clean_host_address(user.host),
                     'started': user.started,
                     'pid': user.pid
                 }
@@ -435,6 +435,31 @@ class SystemMonitor:
             error_msg = f"Error collecting user data: {str(e)}"
             self.record_error(error_msg)
             return {'error': error_msg}
+    
+    def clean_host_address(self, host):
+        """Clean and validate host address for database storage"""
+        if not host or host in ['', ':0.0.0.0']:
+            return '0.0.0.0'
+        
+        # Handle IPv6 localhost
+        if host in [':1', '::1']:
+            return '127.0.0.1'
+        
+        # Remove any leading colons from IPv6 addresses
+        if host.startswith(':'):
+            host = host.lstrip(':')
+        
+        # Basic validation for IPv4 addresses
+        if host.count('.') == 3:
+            try:
+                parts = host.split('.')
+                if all(part.isdigit() and 0 <= int(part) <= 255 for part in parts):
+                    return host
+            except:
+                pass
+        
+        # If we can't validate it properly, use default
+        return '0.0.0.0'
     
     def collect_authentication_data(self):
         """Collect authentication-related data"""
