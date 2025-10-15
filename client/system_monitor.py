@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Enhanced System Monitoring Agent with Built-in Installer
-Collects system information and sends encrypted data to central server periodically
+Collects system information and sends data to central server periodically
 """
 
 import os
@@ -23,16 +23,13 @@ from pathlib import Path
 try:
     import psutil
     import requests
-    from cryptography.fernet import Fernet
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     DEPENDENCIES_INSTALLED = True
 except ImportError:
     DEPENDENCIES_INSTALLED = False
 
 # Configuration
 CONFIG = {
-    'server_url': 'http://your-server.com/api/logs',
+    'server_url': 'http://localhost:8000/api/logs/upload_logs/',
     'interval': 60,
     'hostname': socket.gethostname(),
     'max_retries': 3,
@@ -40,7 +37,6 @@ CONFIG = {
     'batch_size': 50,
     'install_dir': '/opt/system_monitor',
     'config_file': '/etc/system_monitor/config.json',
-    'key_file': '/etc/system_monitor/key.key',
     'log_file': '/var/log/system_monitor/system_monitor.log',
     'venv_dir': '/opt/system_monitor/venv'
 }
@@ -95,8 +91,7 @@ class Installer:
         
         requirements = [
             'psutil>=5.8.0',
-            'requests>=2.25.0',
-            'cryptography>=3.4.0'
+            'requests>=2.25.0'
         ]
         
         try:
@@ -283,79 +278,6 @@ WantedBy=multi-user.target
         return True
 
 
-class EncryptionManager:
-    def __init__(self, key_file):
-        self.key_file = key_file
-        self.fernet = None
-        self.load_or_create_key()
-    
-    def generate_key_from_password(self, password, salt=None):
-        """Generate encryption key from password"""
-        if salt is None:
-            salt = os.urandom(16)
-        
-        kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
-            length=32,
-            salt=salt,
-            iterations=100000,
-        )
-        key = base64.urlsafe_b64encode(kdf.derive(password.encode()))
-        return key, salt
-    
-    def load_or_create_key(self):
-        """Load existing key or create new one"""
-        try:
-            if os.path.exists(self.key_file):
-                with open(self.key_file, 'r') as f:
-                    key_data = json.load(f)
-                    key = base64.urlsafe_b64decode(key_data['key'].encode())
-                    salt = base64.urlsafe_b64decode(key_data['salt'].encode())
-                self.fernet = Fernet(key)
-            else:
-                # Key will be created during setup
-                pass
-        except Exception as e:
-            logging.error(f"Error loading encryption key: {e}")
-            raise
-    
-    def create_key(self, password):
-        """Create new encryption key from password"""
-        key, salt = self.generate_key_from_password(password)
-        self.fernet = Fernet(key)
-        
-        # Save key data
-        key_data = {
-            'key': base64.urlsafe_b64encode(key).decode(),
-            'salt': base64.urlsafe_b64encode(salt).decode()
-        }
-        
-        os.makedirs(os.path.dirname(self.key_file), mode=0o700, exist_ok=True)
-        with open(self.key_file, 'w') as f:
-            json.dump(key_data, f)
-        
-        os.chmod(self.key_file, 0o600)
-        return key_data
-    
-    def encrypt_data(self, data):
-        """Encrypt JSON data"""
-        if not self.fernet:
-            raise ValueError("Encryption not initialized")
-        
-        json_data = json.dumps(data).encode()
-        encrypted_data = self.fernet.encrypt(json_data)
-        return base64.urlsafe_b64encode(encrypted_data).decode()
-    
-    def decrypt_data(self, encrypted_data):
-        """Decrypt data (for testing)"""
-        if not self.fernet:
-            raise ValueError("Encryption not initialized")
-        
-        encrypted_bytes = base64.urlsafe_b64decode(encrypted_data.encode())
-        decrypted_data = self.fernet.decrypt(encrypted_bytes)
-        return json.loads(decrypted_data.decode())
-
-
 class ConfigManager:
     def __init__(self, config_file):
         self.config_file = config_file
@@ -376,19 +298,17 @@ class ConfigManager:
         
         # Server configuration
         print("\n--- Server Configuration ---")
-        server_url = input("Enter central server URL (e.g., https://your-server.com/api/logs): ").strip()
+        server_url = input("Enter central server URL (e.g., http://localhost:8000/api/logs/upload_logs/): ").strip()
         if not server_url:
-            print("Server URL is required!")
-            sys.exit(1)
+            server_url = 'http://localhost:8000/api/logs/upload_logs/'
+            print(f"Using default URL: {server_url}")
         
         # Authentication
         print("\n--- Authentication ---")
         username = input("Enter username for server authentication: ").strip()
-        password = getpass.getpass("Enter password: ")
-        
-        if not username or not password:
-            print("Username and password are required!")
-            sys.exit(1)
+        if not username:
+            username = 'monitoring_agent'
+            print(f"Using default username: {username}")
         
         # User monitoring scope
         print("\n--- User Monitoring Scope ---")
@@ -418,7 +338,6 @@ class ConfigManager:
         self.config = {
             'server_url': server_url,
             'username': username,
-            'password': password,
             'monitor_all_users': monitor_all_users,
             'specific_user': specific_user,
             'interval': interval,
@@ -453,9 +372,8 @@ class ConfigManager:
 
 
 class SystemMonitor:
-    def __init__(self, config_manager, encryption_manager):
+    def __init__(self, config_manager):
         self.config_manager = config_manager
-        self.encryption_manager = encryption_manager
         self.config = config_manager.config
         self.data_buffer = []
         self.last_send = 0
@@ -919,17 +837,14 @@ class SystemMonitor:
             return {'error': error_msg}
     
     def send_data(self, data):
-        """Send encrypted data to central server with authentication"""
+        """Send JSON data to central server with authentication"""
         for attempt in range(self.config['max_retries']):
             try:
-                # Encrypt the data
-                encrypted_payload = self.encryption_manager.encrypt_data(data)
-                
-                # Prepare request
+                # Prepare request - send JSON directly
                 payload = {
                     'hostname': self.config['hostname'],
                     'username': self.config['username'],
-                    'encrypted_data': encrypted_payload,
+                    'encrypted_data': json.dumps(data),  # Just JSON string, not encrypted
                     'timestamp': datetime.utcnow().isoformat()
                 }
                 
@@ -945,7 +860,7 @@ class SystemMonitor:
                     self.error_count = 0  # Reset error count on successful send
                     return True
                 elif response.status_code == 401:
-                    logging.error("Authentication failed - check username/password")
+                    logging.error("Authentication failed - check username")
                     self.record_error("Server authentication failed")
                     return False
                 else:
@@ -1017,36 +932,22 @@ def setup_agent():
         sys.exit(1)
     
     config_manager = ConfigManager(CONFIG['config_file'])
-    encryption_manager = EncryptionManager(CONFIG['key_file'])
     
     print("=== System Monitoring Agent Setup ===")
     
     # Run configuration
     config = config_manager.setup_config()
     
-    # Set up encryption
-    encryption_password = getpass.getpass("\nEnter encryption password (for local data protection): ")
-    if not encryption_password:
-        print("Encryption password is required!")
-        sys.exit(1)
-    
-    encryption_manager.create_key(encryption_password)
-    print("✅ Encryption setup completed")
-    
     # Test configuration
     print("\n--- Testing Configuration ---")
-    monitor = SystemMonitor(config_manager, encryption_manager)
+    monitor = SystemMonitor(config_manager)
     test_data = {'test': 'data', 'timestamp': datetime.utcnow().isoformat()}
     
     try:
-        encrypted = encryption_manager.encrypt_data(test_data)
-        print("✅ Encryption test passed")
-        
         # Save final config
         config_manager.save_config()
         print(f"\n🎉 Setup completed successfully!")
         print(f"📁 Config file: {CONFIG['config_file']}")
-        print(f"🔑 Key file: {CONFIG['key_file']}")
         print(f"📊 Monitoring: {'All users' if config['monitor_all_users'] else 'User: ' + config['specific_user']}")
         print(f"⏰ Interval: {config['interval']} seconds")
         print(f"🌐 Server: {config['server_url']}")
@@ -1087,7 +988,6 @@ Examples:
 
 Configuration:
     Config file: {config_file}
-    Key file:    {key_file}
     Log file:    {log_file}
     Install dir: {install_dir}
 """.format(**CONFIG))
@@ -1136,14 +1036,11 @@ def main():
         print("  sudo python3 system_monitor.py setup")
         sys.exit(1)
     
-    # Initialize encryption
-    encryption_manager = EncryptionManager(CONFIG['key_file'])
-    
     # Check if running as root for full functionality
     if os.geteuid() != 0:
         logging.warning("Running without root privileges. Some monitoring features may be limited.")
     
-    monitor = SystemMonitor(config_manager, encryption_manager)
+    monitor = SystemMonitor(config_manager)
     
     # Handle graceful shutdown
     def signal_handler(signum, frame):
