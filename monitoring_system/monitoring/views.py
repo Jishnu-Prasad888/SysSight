@@ -16,6 +16,9 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
 import threading
+from colorama import Fore , init
+
+init(autoreset=True)
 
 logger = logging.getLogger(__name__)
 
@@ -497,26 +500,29 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
+
     def _generate_security_alerts(self, agent, log_entry, timestamp):
         """Generate security alerts based on log data"""
         alerts_created = []
-        
+
         try:
             # Check authentication issues
             auth_data = log_entry.get('authentication', {})
             failed_logins = auth_data.get('failed_login_attempts', 0)
-            
+
             if failed_logins > 5:
                 alert = self._create_alert_if_not_exists(
                     agent=agent,
                     title="High failed login attempts",
                     description=f"Detected {failed_logins} failed login attempts on {agent.hostname}",
                     level='high',
+                    alert_type='authentication',
+                    metadata={'failed_attempts': failed_logins},
                     timestamp=timestamp
                 )
                 if alert:
                     alerts_created.append(alert)
-            
+
             # Check privilege escalation
             privilege_escalation = auth_data.get('privilege_escalation', 0)
             if privilege_escalation > 50:
@@ -525,47 +531,69 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                     title="Excessive privilege escalation",
                     description=f"Detected {privilege_escalation} privilege escalation events on {agent.hostname}",
                     level='medium',
+                    alert_type='security',
+                    metadata={'escalation_count': privilege_escalation},
                     timestamp=timestamp
                 )
                 if alert:
                     alerts_created.append(alert)
-            
+
             # Check for suspicious processes
             anomaly_data = log_entry.get('anomaly_threat_detection', {})
             suspicious_processes = anomaly_data.get('suspicious_processes', 0)
-            
+
             if suspicious_processes > 10:
                 alert = self._create_alert_if_not_exists(
                     agent=agent,
                     title="Suspicious processes detected",
                     description=f"Detected {suspicious_processes} suspicious processes on {agent.hostname}",
                     level='high',
+                    alert_type='process',
+                    metadata={'suspicious_count': suspicious_processes},
                     timestamp=timestamp
                 )
                 if alert:
                     alerts_created.append(alert)
-            
+
             # Check zombie processes
             resource_data = log_entry.get('resource_anomalies', {})
             zombie_count = resource_data.get('zombie_processes', 0)
-            
+
             if zombie_count > 5:
                 alert = self._create_alert_if_not_exists(
                     agent=agent,
                     title="High zombie process count",
                     description=f"Detected {zombie_count} zombie processes on {agent.hostname}",
                     level='medium',
+                    alert_type='process',
+                    metadata={'zombie_count': zombie_count},
                     timestamp=timestamp
                 )
                 if alert:
                     alerts_created.append(alert)
-            
+
+            # Check network anomalies
+            network_data = log_entry.get('network_connection', {})
+            if network_data.get('suspicious_connections', 0) > 0:
+                alert = self._create_alert_if_not_exists(
+                    agent=agent,
+                    title="Suspicious network connections detected",
+                    description=f"Detected suspicious network connections on {agent.hostname}",
+                    level='high',
+                    alert_type='network',
+                    metadata={'suspicious_connections': network_data.get('suspicious_connections', 0)},
+                    timestamp=timestamp
+                )
+                if alert:
+                    alerts_created.append(alert)
+
         except Exception as e:
             logger.error(f"Error generating security alerts: {e}")
-        
+
         return alerts_created
-    
-    def _create_alert_if_not_exists(self, agent, title, description, level, timestamp):
+
+
+    def _create_alert_if_not_exists(self, agent, title, description, level, alert_type='system', metadata=None, timestamp=None):
         """Create alert only if similar alert doesn't exist recently"""
         recent_time = timezone.now() - timedelta(minutes=30)
         
@@ -578,15 +606,21 @@ class SystemLogViewSet(viewsets.ModelViewSet):
         ).exists()
         
         if not existing:
-            alert = Alert.objects.create(
-                agent=agent,
-                title=title,
-                description=description,
-                level=level,
-                triggered_at=timestamp,
-                resolved=False
-            )
-            logger.info(f"Created alert: {title} (Level: {level})")
+            alert_data = {
+                'agent': agent,
+                'title': title,
+                'description': description,
+                'level': level,
+                'alert_type': alert_type,
+                'triggered_at': timestamp or timezone.now(),
+                'resolved': False
+            }
+            
+            if metadata:
+                alert_data['metadata'] = metadata
+                
+            alert = Alert.objects.create(**alert_data)
+            logger.info(f"Created alert: {title} (Level: {level}, Type: {alert_type})")
             return alert
         
         return None
@@ -624,6 +658,13 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                         title=f"{resource_type} threshold exceeded: {threshold.name}",
                         description=f"{resource_type} usage {current_value:.1f}% exceeds threshold {threshold.threshold_value}% on {agent.hostname}",
                         level=alert_level,
+                        alert_type='resource',
+                        metadata={
+                            'resource_type': resource_type.lower(),
+                            'current_value': current_value,
+                            'threshold_value': threshold.threshold_value,
+                            'threshold_name': threshold.name
+                        },
                         timestamp=metric.timestamp
                     )
                         
@@ -633,6 +674,7 @@ class SystemLogViewSet(viewsets.ModelViewSet):
 class AlertViewSet(viewsets.ModelViewSet):
     queryset = Alert.objects.all().order_by('-triggered_at')
     serializer_class = AlertSerializer
+    # Remove pagination_class = None to enable default pagination
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -654,10 +696,16 @@ class AlertViewSet(viewsets.ModelViewSet):
         if agent_id:
             queryset = queryset.filter(agent_id=agent_id)
         
+        # Filter by alert_type (new filter)
+        alert_type = self.request.query_params.get('alert_type')
+        if alert_type:
+            queryset = queryset.filter(alert_type=alert_type)
+        
         return queryset
     
     @action(detail=True, methods=['post'])
     def resolve(self, request, pk=None):
+        """Mark alert as resolved"""
         alert = self.get_object()
         alert.resolved = True
         alert.resolved_at = timezone.now()
@@ -667,6 +715,164 @@ class AlertViewSet(viewsets.ModelViewSet):
         threading.Thread(target=self._send_resolution_notification, args=(alert,)).start()
         
         return Response({'status': 'alert resolved'})
+    
+    @action(detail=True, methods=['post'])
+    def unresolve(self, request, pk=None):
+        """Mark alert as unresolved"""
+        alert = self.get_object()
+        alert.resolved = False
+        alert.resolved_at = None
+        alert.save()
+        
+        serializer = self.get_serializer(alert)
+        return Response({
+            'status': 'alert unresolved',
+            'alert': serializer.data
+        })
+    
+    @action(detail=True, methods=['post'])
+    def add_note(self, request, pk=None):
+        """Add note to alert"""
+        alert = self.get_object()
+        note = request.data.get('note', '').strip()
+        
+        if not note:
+            return Response(
+                {'error': 'Note cannot be empty'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        alert.add_note(note)
+        alert.save()
+        
+        serializer = self.get_serializer(alert)
+        return Response({
+            'status': 'note added',
+            'alert': serializer.data
+        })
+    
+    @action(detail=False, methods=['post'])
+    def bulk_resolve(self, request):
+        """Bulk resolve alerts"""
+        try:
+            alert_ids = request.data.get('alert_ids', [])
+            if not alert_ids:
+                return Response(
+                    {'error': 'No alert IDs provided'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate alert IDs are integers
+            try:
+                alert_ids = [int(alert_id) for alert_id in alert_ids]
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid alert IDs'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            alerts = Alert.objects.filter(id__in=alert_ids)
+            updated_count = alerts.update(
+                resolved=True,
+                resolved_at=timezone.now()
+            )
+            
+            logger.info(f"Bulk resolved {updated_count} alerts")
+            
+            return Response({
+                'status': 'success',
+                'message': f'Successfully resolved {updated_count} alert(s)',
+                'resolved_count': updated_count
+            })
+            
+        except Exception as e:
+            logger.error(f"Bulk resolve error: {str(e)}")
+            return Response(
+                {'error': f'Bulk resolve failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['post'])
+    def bulk_unresolve(self, request):
+        """Bulk unresolve alerts"""
+        try:
+            alert_ids = request.data.get('alert_ids', [])
+            if not alert_ids:
+                return Response(
+                    {'error': 'No alert IDs provided'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate alert IDs are integers
+            try:
+                alert_ids = [int(alert_id) for alert_id in alert_ids]
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid alert IDs'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            alerts = Alert.objects.filter(id__in=alert_ids)
+            updated_count = alerts.update(
+                resolved=False,
+                resolved_at=None
+            )
+            
+            logger.info(f"Bulk unresolved {updated_count} alerts")
+            
+            return Response({
+                'status': 'success',
+                'message': f'Successfully unresolved {updated_count} alert(s)',
+                'unresolved_count': updated_count
+            })
+            
+        except Exception as e:
+            logger.error(f"Bulk unresolve error: {str(e)}")
+            return Response(
+                {'error': f'Bulk unresolve failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['post'])
+    def bulk_delete(self, request):
+        """Bulk delete alerts"""
+        try:
+            alert_ids = request.data.get('alert_ids', [])
+            if not alert_ids:
+                return Response(
+                    {'error': 'No alert IDs provided'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate alert IDs are integers
+            try:
+                alert_ids = [int(alert_id) for alert_id in alert_ids]
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid alert IDs'}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            alerts = Alert.objects.filter(id__in=alert_ids)
+            deleted_count = alerts.count()
+            
+            # Delete alerts
+            alerts.delete()
+            
+            logger.info(f"Bulk deleted {deleted_count} alerts")
+            
+            return Response({
+                'status': 'success',
+                'message': f'Successfully deleted {deleted_count} alert(s)',
+                'deleted_count': deleted_count
+            })
+            
+        except Exception as e:
+            logger.error(f"Bulk delete error: {str(e)}")
+            return Response(
+                {'error': f'Bulk delete failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     
     def _send_resolution_notification(self, alert):
         """Send resolution notifications"""
@@ -717,28 +923,62 @@ class UserSessionViewSet(viewsets.ModelViewSet):
 class HostMetricViewSet(viewsets.ModelViewSet):
     queryset = HostMetric.objects.all().order_by('-timestamp')
     serializer_class = HostMetricSerializer
+    pagination_class = None
     
+    # In your HostMetricViewSet, enhance the get_queryset method:
     def get_queryset(self):
         queryset = super().get_queryset()
-        
+
+        # Log all query parameters
+        logger.info(f"🔍 METRICS API CALL - All query params: {dict(self.request.query_params)}")
+
         # Filter by agent
         agent_id = self.request.query_params.get('agent_id')
+        logger.info(f"🔍 Agent ID from request: '{agent_id}' (type: {type(agent_id)})")
+
         if agent_id and agent_id != 'null':
             try:
                 agent_id_int = int(agent_id)
+                initial_count = queryset.count()
                 queryset = queryset.filter(agent_id=agent_id_int)
-            except (ValueError, TypeError):
+                filtered_count = queryset.count()
+                logger.info(f"🔍 Agent filtering - Before: {initial_count}, After: {filtered_count}")
+            except (ValueError, TypeError) as e:
+                logger.error(f"🔍 Invalid agent ID: '{agent_id}', error: {e}")
                 pass
-        
+            
         # Filter by time range
         hours = self.request.query_params.get('hours', 24)
+        logger.info(f"🔍 Hours parameter: '{hours}' (type: {type(hours)})")
+
         try:
-            time_threshold = timezone.now() - timedelta(hours=int(hours))
+            hours_int = int(hours)
+            time_threshold = timezone.now() - timedelta(hours=hours_int)
+            initial_count = queryset.count()
             queryset = queryset.filter(timestamp__gte=time_threshold)
-        except (ValueError, TypeError):
-            time_threshold = timezone.now() - timedelta(hours=24)
-            queryset = queryset.filter(timestamp__gte=time_threshold)
-        
+            filtered_count = queryset.count()
+            logger.info(f"🔍 Time filtering - Hours: {hours_int}, Before: {initial_count}, After: {filtered_count}")
+            logger.info(f"🔍 Time threshold: {time_threshold}")
+            logger.info(f"🔍 Current time: {timezone.now()}")
+        except (ValueError, TypeError) as e:
+            logger.error(f"🔍 Invalid hours parameter: '{hours}', error: {e}")
+
+        final_count = queryset.count()
+        logger.info(f"🔍 FINAL QUERYSET COUNT: {final_count}")
+
+        # Log a few sample records
+        if final_count > 0:
+            samples = queryset[:3]
+            logger.info(f"🔍 SAMPLE METRICS ({len(samples)}):")
+            for i, sample in enumerate(samples):
+                logger.info(f"🔍   {i+1}. ID: {sample.id}, Time: {sample.timestamp}, CPU: {sample.cpu_usage}%")
+        else:
+            logger.warning("🔍 NO METRICS FOUND AFTER FILTERING!")
+
+            # Debug: check what happens without time filtering
+            no_time_filter = HostMetric.objects.filter(agent_id=agent_id)
+            logger.info(f"🔍 DEBUG - Without time filter: {no_time_filter.count()} metrics")
+
         return queryset
     
     @action(detail=False, methods=['post'])
@@ -750,6 +990,10 @@ class HostMetricViewSet(viewsets.ModelViewSet):
         
         try:
             data = serializer.validated_data
+            
+            print(Fore.YELLOW + "VALIDATED DATA")
+            print(Fore.GREEN + f"{data}")
+            print(Fore.GREEN + "VALIDATED DATA END")
             
             # Get agent
             try:

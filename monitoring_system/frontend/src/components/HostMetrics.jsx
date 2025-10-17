@@ -9,7 +9,7 @@ const HostMetrics = ({ host }) => {
     const [selectedAgent, setSelectedAgent] = useState(null);
     const [metrics, setMetrics] = useState([]);
     const [agents, setAgents] = useState([]);
-    const [timeRange, setTimeRange] = useState('24');
+    const [timeRange, setTimeRange] = useState('1');
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
 
@@ -26,7 +26,15 @@ const HostMetrics = ({ host }) => {
             }
         }
     }, [selectedHost, agents, timeRange]);
-
+    const debugMetricsData = async (agentId) => {
+        try {
+            const response = await fetch(`/api/metrics/debug_metrics/?agent_id=${agentId}&hours=${timeRange}`);
+            const debugData = await response.json();
+            console.log('Debug Metrics Data:', debugData);
+        } catch (error) {
+            console.error('Debug endpoint error:', error);
+        }
+    };
     const loadAgents = async () => {
         try {
             console.log('Loading agents for metrics...');
@@ -48,37 +56,31 @@ const HostMetrics = ({ host }) => {
     };
 
     const loadMetrics = async (agentId) => {
-        if (!agentId) {
-            console.warn('No agent ID provided');
-            return;
-        }
+        if (!agentId) return;
 
         setLoading(true);
         setError(null);
 
         try {
-            console.log(`Loading metrics for agent ${agentId}, timeRange: ${timeRange}h`);
+            console.log(`🔍 Loading metrics for agent ${agentId}, last ${timeRange} hour(s)`);
+
             const metricsData = await getMetrics({
                 agent_id: agentId,
-                hours: timeRange
+                hours: parseInt(timeRange, 10)  // Ensure it’s a number
             });
-            console.log('Metrics loaded:', metricsData);
 
-            // Ensure we always have an array
-            const metricsArray = Array.isArray(metricsData) ? metricsData : [];
-            setMetrics(metricsArray);
+            console.log('🔍 Metrics received:', metricsData.length, metricsData);
 
-            if (metricsArray.length === 0) {
-                setError('No metrics data available for this agent in the selected time range');
-            }
+            setMetrics(Array.isArray(metricsData) ? metricsData : []);
         } catch (error) {
-            console.error('Failed to load metrics:', error);
+            console.error('🔍 Failed to load metrics:', error);
             setMetrics([]);
-            setError('Failed to load metrics data. Please try again.');
+            setError(`Failed to load metrics: ${error.message}`);
         } finally {
             setLoading(false);
         }
     };
+
 
     const handleHostChange = (hostname) => {
         setSelectedHost(hostname);
@@ -110,7 +112,6 @@ const HostMetrics = ({ host }) => {
                         selectedHost={selectedHost}
                         onHostChange={handleHostChange}
                     />
-
                     <select
                         value={timeRange}
                         onChange={(e) => setTimeRange(e.target.value)}
@@ -120,6 +121,7 @@ const HostMetrics = ({ host }) => {
                         <option value="6">Last 6 hours</option>
                         <option value="24">Last 24 hours</option>
                         <option value="168">Last 7 days</option>
+                        <option value="720">Last 30 days</option>
                     </select>
 
                     <button
@@ -159,10 +161,43 @@ const HostMetrics = ({ host }) => {
                         Retry
                     </button>
                 </div>
-            ) : metrics.length === 0 ? (
-                <div className="bg-white rounded-lg shadow p-8 text-center text-gray-500">
-                    <p className="mb-2">No metrics data available for {selectedHost}</p>
-                    <p className="text-sm">Waiting for agent to send metrics...</p>
+            ) : metrics.length === 0 && selectedAgent ? (
+                <div className="bg-white rounded-lg shadow p-8 text-center">
+                    <div className="max-w-md mx-auto">
+                        <div className="text-6xl mb-4">📊</div>
+                        <h3 className="text-xl font-semibold text-gray-700 mb-2">
+                            No Metrics Data Yet
+                        </h3>
+                        <p className="text-gray-500 mb-4">
+                            No metrics have been collected from <strong>{selectedHost}</strong> in the last {timeRange} hours.
+                        </p>
+
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-left mb-6">
+                            <h4 className="font-semibold text-blue-800 mb-2">Troubleshooting Steps:</h4>
+                            <ul className="text-sm text-blue-700 space-y-1">
+                                <li>• Verify the agent service is running on the host</li>
+                                <li>• Check agent logs for errors</li>
+                                <li>• Ensure metrics collection is enabled in agent config</li>
+                                <li>• Verify network connectivity to the server</li>
+                                <li>• Wait a few minutes for initial data collection</li>
+                            </ul>
+                        </div>
+
+                        <div className="flex justify-center space-x-4">
+                            <button
+                                onClick={handleRefresh}
+                                className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600"
+                            >
+                                Check Again
+                            </button>
+                            <button
+                                onClick={() => setTimeRange('168')}
+                                className="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600"
+                            >
+                                Check Last 7 Days
+                            </button>
+                        </div>
+                    </div>
                 </div>
             ) : (
                 <>
@@ -199,6 +234,7 @@ const HostMetrics = ({ host }) => {
                                     metricKey={metricType.key}
                                     color={metricType.color}
                                     unit={metricType.unit}
+                                    label={metricType.label}
                                 />
                             </div>
                         ))}

@@ -73,6 +73,7 @@ class SystemLog(models.Model):
     def __str__(self):
         return f"{self.agent.hostname} - {self.timestamp}"
 
+# Add to Alert model in models.py
 class Alert(models.Model):
     ALERT_LEVELS = [
         ('low', 'Low'),
@@ -81,16 +82,79 @@ class Alert(models.Model):
         ('critical', 'Critical'),
     ]
 
+    ALERT_TYPES = [
+        ('process', 'Process'),
+        ('network', 'Network'),
+        ('authentication', 'Authentication'),
+        ('resource', 'Resource'),
+        ('security', 'Security'),
+        ('system', 'System'),
+    ]
+
     agent = models.ForeignKey(MonitoringAgent, on_delete=models.CASCADE)
     title = models.CharField(max_length=255)
     description = models.TextField()
     level = models.CharField(max_length=10, choices=ALERT_LEVELS, default='medium')
+    alert_type = models.CharField(max_length=20, choices=ALERT_TYPES, default='system')  # New field
     triggered_at = models.DateTimeField(auto_now_add=True)
     resolved = models.BooleanField(default=False)
     resolved_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)  # New field for admin notes
+    metadata = models.JSONField(default=dict, blank=True)  # New field for additional data
+
+    class Meta:
+        ordering = ['-triggered_at']
 
     def __str__(self):
         return f"{self.level.upper()}: {self.title}"
+
+    def add_note(self, note):
+        """Add a note to the alert"""
+        from django.utils import timezone
+        timestamp = timezone.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        if self.notes:
+            self.notes += f"\n[{timestamp}] {note}"
+        else:
+            self.notes = f"[{timestamp}] {note}"
+        self.save()
+    ALERT_LEVELS = [
+        ('low', 'Low'),
+        ('medium', 'Medium'),
+        ('high', 'High'),
+        ('critical', 'Critical'),
+    ]
+
+    ALERT_TYPES = [
+        ('process', 'Process'),
+        ('network', 'Network'),
+        ('authentication', 'Authentication'),
+        ('resource', 'Resource'),
+        ('security', 'Security'),
+        ('system', 'System'),
+    ]
+
+    agent = models.ForeignKey(MonitoringAgent, on_delete=models.CASCADE)
+    title = models.CharField(max_length=255)
+    description = models.TextField()
+    level = models.CharField(max_length=10, choices=ALERT_LEVELS, default='medium')
+    alert_type = models.CharField(max_length=20, choices=ALERT_TYPES, default='system')  # New field
+    triggered_at = models.DateTimeField(auto_now_add=True)
+    resolved = models.BooleanField(default=False)
+    resolved_at = models.DateTimeField(null=True, blank=True)
+    notes = models.TextField(blank=True)  # New field for admin notes
+    metadata = models.JSONField(default=dict)  # New field for additional data like process names, network info
+
+    def __str__(self):
+        return f"{self.level.upper()}: {self.title}"
+
+    def add_note(self, note):
+        """Add a note to the alert"""
+        if self.notes:
+            self.notes += f"\n{timezone.now().strftime('%Y-%m-%d %H:%M')}: {note}"
+        else:
+            self.notes = f"{timezone.now().strftime('%Y-%m-%d %H:%M')}: {note}"
+        self.save()
 
 class UserSession(models.Model):
     agent = models.ForeignKey(MonitoringAgent, on_delete=models.CASCADE)

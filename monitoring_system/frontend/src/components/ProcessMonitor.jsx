@@ -1,88 +1,81 @@
 // src/components/ProcessMonitor.jsx
 import React, { useState, useEffect } from 'react';
 import { getProcesses, getAgents } from '../services/api';
-import ProcessTable from './ProcessTable';
 
-const ProcessMonitor = ({ host }) => {
-    const [selectedHost, setSelectedHost] = useState(host || ''); // Fix: Use empty string instead of null
-    const [processes, setProcesses] = useState([]);
+const ProcessMonitor = () => {
     const [agents, setAgents] = useState([]);
+    const [selectedAgent, setSelectedAgent] = useState('');
+    const [processData, setProcessData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [currentPage, setCurrentPage] = useState(1);
-    const [totalPages, setTotalPages] = useState(1);
-    const [error, setError] = useState(null);
+    const [pageSize, setPageSize] = useState(50);
 
     useEffect(() => {
         loadAgents();
     }, []);
 
     useEffect(() => {
-        if (selectedHost) {
+        if (selectedAgent) {
             loadProcesses();
         }
-    }, [selectedHost, currentPage]);
+    }, [selectedAgent, currentPage, pageSize]);
 
     const loadAgents = async () => {
         try {
+            setLoading(true);
             const agentsData = await getAgents();
-            setAgents(agentsData);
-            if (!selectedHost && agentsData.length > 0) {
-                setSelectedHost(agentsData[0].hostname);
+            console.log('Agents data:', agentsData);
+
+            // Ensure agents is always an array
+            const agentsArray = Array.isArray(agentsData) ? agentsData : [];
+            setAgents(agentsArray);
+
+            if (agentsArray.length > 0 && !selectedAgent) {
+                setSelectedAgent(agentsArray[0].hostname);
             }
         } catch (error) {
             console.error('Failed to load agents:', error);
-            setError('Failed to load agents');
-        }
-    };
-
-    const loadProcesses = async () => {
-        if (!selectedHost) return;
-
-        setLoading(true);
-        setError(null);
-        try {
-            const response = await getProcesses(selectedHost, currentPage);
-            console.log('Processes response:', response); // Debug log
-
-            // Merge or choose which process list to display
-            const cpuProcesses = response?.top_cpu_processes || [];
-            const memoryProcesses = response?.top_memory_processes || [];
-
-            // You can choose one of these behaviors:
-
-            // (A) Show memory-based list (most likely for your UI)
-            const processesData = memoryProcesses;
-
-            // (B) OR, show both combined (uncomment if desired)
-            // const processesData = [...cpuProcesses, ...memoryProcesses];
-
-            console.log("processesData:", processesData);
-
-            setProcesses(processesData);
-            setTotalPages(response?.total_pages || 1);
-
-            if (processesData.length === 0) {
-                setError('No processes found for this host');
-            }
-        } catch (error) {
-            console.error('Failed to load processes:', error);
-            setError('Failed to load processes');
-            setProcesses([]); // Always reset to empty array
+            setAgents([]);
         } finally {
             setLoading(false);
         }
     };
 
+    const loadProcesses = async () => {
+        if (!selectedAgent) return;
 
-    const refreshProcesses = () => {
-        setCurrentPage(1);
-        loadProcesses();
+        try {
+            setLoading(true);
+            const data = await getProcesses(selectedAgent, currentPage, pageSize);
+            console.log('Process data:', data);
+            setProcessData(data);
+        } catch (error) {
+            console.error('Failed to load processes:', error);
+            setProcessData(null);
+        } finally {
+            setLoading(false);
+        }
     };
 
-    const handleHostChange = (newHost) => {
-        setSelectedHost(newHost);
+    const handlePageChange = (newPage) => {
+        setCurrentPage(newPage);
+    };
+
+    const handlePageSizeChange = (newSize) => {
+        setPageSize(Number(newSize));
         setCurrentPage(1);
-        setProcesses([]); // Clear processes when host changes
+    };
+
+    const formatBytes = (bytes) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    };
+
+    const formatPercentage = (value) => {
+        return typeof value === 'number' ? value.toFixed(1) + '%' : '0%';
     };
 
     return (
@@ -90,71 +83,243 @@ const ProcessMonitor = ({ host }) => {
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold">Process Monitor</h1>
 
-                <div className="flex space-x-4">
+                <div className="flex space-x-4 items-center">
                     <select
-                        value={selectedHost} // Now this is always a string, never null
-                        onChange={(e) => handleHostChange(e.target.value)}
-                        className="border rounded-lg px-3 py-2"
+                        value={selectedAgent}
+                        onChange={(e) => setSelectedAgent(e.target.value)}
+                        className="border rounded-lg px-3 py-2 min-w-[200px]"
+                        disabled={loading}
                     >
-                        <option value="">Select Host</option>
-                        {agents.map(agent => (
+                        <option value="">Select Agent</option>
+                        {Array.isArray(agents) && agents.map(agent => (
                             <option key={agent.id} value={agent.hostname}>
                                 {agent.hostname}
                             </option>
                         ))}
                     </select>
 
-                    <button
-                        onClick={refreshProcesses}
-                        disabled={loading || !selectedHost}
-                        className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:opacity-50"
-                    >
-                        {loading ? 'Refreshing...' : 'Refresh'}
-                    </button>
+                    {processData && (
+                        <select
+                            value={pageSize}
+                            onChange={(e) => handlePageSizeChange(e.target.value)}
+                            className="border rounded-lg px-3 py-2"
+                        >
+                            <option value={20}>20 per page</option>
+                            <option value={50}>50 per page</option>
+                            <option value={100}>100 per page</option>
+                        </select>
+                    )}
                 </div>
             </div>
 
-            {error && (
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-                    <p className="text-yellow-700">{error}</p>
+            {loading && (
+                <div className="text-center py-8">Loading...</div>
+            )}
+
+            {!loading && selectedAgent && !processData && (
+                <div className="text-center py-8 text-gray-500">
+                    No process data available for {selectedAgent}
                 </div>
             )}
 
-            {!selectedHost ? (
-                <div className="text-center py-8 text-gray-500">
-                    Please select a host to view processes
-                </div>
-            ) : (
-                <>
-                    <ProcessTable
-                        processes={processes}
-                        loading={loading}
-                    />
-
-                    {totalPages > 1 && (
-                        <div className="flex justify-center space-x-2">
-                            <button
-                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                disabled={currentPage === 1}
-                                className="px-3 py-1 border rounded disabled:opacity-50"
-                            >
-                                Previous
-                            </button>
-
-                            <span className="px-3 py-1">
-                                Page {currentPage} of {totalPages}
-                            </span>
-
-                            <button
-                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                disabled={currentPage === totalPages}
-                                className="px-3 py-1 border rounded disabled:opacity-50"
-                            >
-                                Next
-                            </button>
+            {processData && (
+                <div className="space-y-6">
+                    {/* System Overview */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div className="bg-white p-4 rounded-lg shadow border">
+                            <h3 className="font-semibold text-gray-700">Total Processes</h3>
+                            <p className="text-2xl font-bold text-blue-600">
+                                {processData.total_processes || 0}
+                            </p>
                         </div>
+                        <div className="bg-white p-4 rounded-lg shadow border">
+                            <h3 className="font-semibold text-gray-700">Root Processes</h3>
+                            <p className="text-2xl font-bold text-red-600">
+                                {processData.root_processes || 0}
+                            </p>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg shadow border">
+                            <h3 className="font-semibold text-gray-700">Load Average</h3>
+                            <p className="text-sm font-mono text-gray-600">
+                                {processData.load_average ? processData.load_average.join(', ') : 'N/A'}
+                            </p>
+                        </div>
+                        <div className="bg-white p-4 rounded-lg shadow border">
+                            <h3 className="font-semibold text-gray-700">Last Updated</h3>
+                            <p className="text-sm text-gray-600">
+                                {processData.timestamp ? new Date(processData.timestamp).toLocaleString() : 'N/A'}
+                            </p>
+                        </div>
+                    </div>
+
+                    {/* Top CPU Processes */}
+                    <div className="bg-white rounded-lg shadow border">
+                        <div className="p-4 border-b">
+                            <h2 className="text-lg font-semibold">Top CPU Processes</h2>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            PID
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            Name
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            CPU %
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            Memory
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            User
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {processData.top_cpu_processes && processData.top_cpu_processes.length > 0 ? (
+                                        processData.top_cpu_processes.map((process, index) => (
+                                            <tr key={index} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {process.pid || 'N/A'}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {process.name || 'Unknown'}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    <span className={`px-2 py-1 rounded-full text-xs ${(process.cpu_percent || 0) > 50 ? 'bg-red-100 text-red-800' :
+                                                            (process.cpu_percent || 0) > 20 ? 'bg-yellow-100 text-yellow-800' :
+                                                                'bg-green-100 text-green-800'
+                                                        }`}>
+                                                        {formatPercentage(process.cpu_percent)}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {formatBytes(process.memory_usage || 0)}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {process.username || 'Unknown'}
+                                                </td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan="5" className="px-6 py-4 text-center text-gray-500">
+                                                No CPU process data available
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    {/* Top Memory Processes with Pagination */}
+                    <div className="bg-white rounded-lg shadow border">
+                        <div className="p-4 border-b flex justify-between items-center">
+                            <h2 className="text-lg font-semibold">Top Memory Processes</h2>
+                            <div className="flex items-center space-x-4">
+                                <span className="text-sm text-gray-600">
+                                    Page {currentPage} of {processData.total_pages || 1}
+                                </span>
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="min-w-full divide-y divide-gray-200">
+                                <thead className="bg-gray-50">
+                                    <tr>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            PID
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            Name
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            Memory Usage
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            CPU %
+                                        </th>
+                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                            User
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody className="bg-white divide-y divide-gray-200">
+                                    {processData.top_memory_processes && processData.top_memory_processes.length > 0 ? (
+                                        processData.top_memory_processes.map((process, index) => (
+                                            <tr key={index} className="hover:bg-gray-50">
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {process.pid || 'N/A'}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {process.name || 'Unknown'}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    <span className={`px-2 py-1 rounded-full text-xs ${(process.memory_percent || 0) > 50 ? 'bg-red-100 text-red-800' :
+                                                            (process.memory_percent || 0) > 20 ? 'bg-yellow-100 text-yellow-800' :
+                                                                'bg-green-100 text-green-800'
+                                                        }`}>
+                                                        {formatBytes(process.memory_usage || 0)}
+                                                        {process.memory_percent && ` (${formatPercentage(process.memory_percent)})`}
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {formatPercentage(process.cpu_percent)}
+                                                </td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                                    {process.username || 'Unknown'}
+                                                </td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan="5" className="px-6 py-4 text-center text-gray-500">
+                                                No memory process data available
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+
+                        {/* Pagination Controls */}
+                        {processData.total_pages > 1 && (
+                            <div className="px-6 py-4 border-t bg-gray-50 flex justify-between items-center">
+                                <button
+                                    onClick={() => handlePageChange(currentPage - 1)}
+                                    disabled={currentPage <= 1}
+                                    className="px-4 py-2 bg-white border rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                                >
+                                    Previous
+                                </button>
+
+                                <span className="text-sm text-gray-600">
+                                    Page {currentPage} of {processData.total_pages}
+                                </span>
+
+                                <button
+                                    onClick={() => handlePageChange(currentPage + 1)}
+                                    disabled={currentPage >= processData.total_pages}
+                                    className="px-4 py-2 bg-white border rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
+                                >
+                                    Next
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {!selectedAgent && !loading && (
+                <div className="text-center py-12 text-gray-500">
+                    <p>Please select an agent to view process information</p>
+                    {agents.length === 0 && (
+                        <p className="mt-2 text-sm">No agents available. Make sure agents are registered and active.</p>
                     )}
-                </>
+                </div>
             )}
         </div>
     );

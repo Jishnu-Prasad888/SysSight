@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Enhanced System Monitoring Agent with Built-in Installer
-Collects system information and sends data to central server periodically
+Enhanced System Monitoring Agent with Encryption and Registration
+Collects system information and sends encrypted data to central server periodically
 """
 
 import os
@@ -27,9 +27,18 @@ try:
 except ImportError:
     DEPENDENCIES_INSTALLED = False
 
+# Try to import encryption modules
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    ENCRYPTION_AVAILABLE = True
+except ImportError:
+    ENCRYPTION_AVAILABLE = False
+
 # Configuration
 CONFIG = {
-    'server_url': 'http://localhost:8000/api/logs/upload_logs/',
+    'server_base_url': 'http://localhost:8000/api',
     'interval': 60,
     'hostname': socket.gethostname(),
     'max_retries': 3,
@@ -58,6 +67,49 @@ def setup_logging():
             logging.StreamHandler()
         ]
     )
+
+class EncryptionManager:
+    """Handles encryption for agent communications"""
+    
+    def __init__(self, password, salt='default_salt_12345'):
+        if not ENCRYPTION_AVAILABLE:
+            raise ImportError("Cryptography library not available")
+        
+        self.password = password
+        self.salt = salt
+        self.fernet = None
+        self.initialize_encryption()
+    
+    def generate_key_from_password(self):
+        """Generate encryption key from password and salt"""
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=self.salt.encode(),
+            iterations=100000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(self.password.encode()))
+        return key
+    
+    def initialize_encryption(self):
+        """Initialize encryption with password and salt"""
+        key = self.generate_key_from_password()
+        self.fernet = Fernet(key)
+    
+    def encrypt_data(self, data):
+        """Encrypt data before sending to server"""
+        if not self.fernet:
+            raise ValueError("Encryption not initialized")
+        
+        # Convert data to JSON string first, then to bytes
+        if isinstance(data, (dict, list)):
+            data = json.dumps(data)
+        
+        if isinstance(data, str):
+            data = data.encode('utf-8')
+        
+        encrypted_bytes = self.fernet.encrypt(data)
+        return base64.urlsafe_b64encode(encrypted_bytes).decode('utf-8')
 
 class Installer:
     """Handles installation of the monitoring agent"""
@@ -91,7 +143,8 @@ class Installer:
         
         requirements = [
             'psutil>=5.8.0',
-            'requests>=2.25.0'
+            'requests>=2.25.0',
+            'cryptography>=3.4.0'
         ]
         
         try:
@@ -284,7 +337,7 @@ class ConfigManager:
         self.config = {}
     
     def setup_config(self):
-        """Interactive configuration setup"""
+        """Interactive configuration setup with registration"""
         print("\n=== System Monitor Setup ===")
         
         # Check if running as root
@@ -298,17 +351,49 @@ class ConfigManager:
         
         # Server configuration
         print("\n--- Server Configuration ---")
-        server_url = input("Enter central server URL (e.g., http://localhost:8000/api/logs/upload_logs/): ").strip()
-        if not server_url:
-            server_url = 'http://localhost:8000/api/logs/upload_logs/'
-            print(f"Using default URL: {server_url}")
+        server_base_url = input("Enter central server base URL (e.g., http://localhost:8000/api): ").strip()
+        if not server_base_url:
+            server_base_url = 'http://localhost:8000/api'
+            print(f"Using default URL: {server_base_url}")
         
-        # Authentication
-        print("\n--- Authentication ---")
-        username = input("Enter username for server authentication: ").strip()
-        if not username:
-            username = 'monitoring_agent'
-            print(f"Using default username: {username}")
+        # Remove trailing slash if present
+        server_base_url = server_base_url.rstrip('/')
+        
+        # Encryption setup
+        print("\n--- Encryption Setup ---")
+        encryption_password = getpass.getpass("Enter encryption password: ").strip()
+        if not encryption_password:
+            print("❌ Encryption password is required!")
+            sys.exit(1)
+        
+        confirm_password = getpass.getpass("Confirm encryption password: ").strip()
+        if encryption_password != confirm_password:
+            print("❌ Passwords do not match!")
+            sys.exit(1)
+        
+        # Get system information for registration
+        hostname = socket.gethostname()
+        username = getpass.getuser()
+        
+        try:
+            # Get IP address
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip_address = s.getsockname()[0]
+            s.close()
+        except:
+            ip_address = "127.0.0.1"
+        
+        # Registration
+        print("\n--- Agent Registration ---")
+        print(f"Hostname: {hostname}")
+        print(f"Username: {username}")
+        print(f"IP Address: {ip_address}")
+        print("\nThe agent will need to be approved in the web interface before it can send logs.")
+        
+        register_now = input("Register with central server now? (Y/n): ").strip().lower()
+        if register_now != 'n':
+            self.register_agent(server_base_url, hostname, username, ip_address, encryption_password)
         
         # User monitoring scope
         print("\n--- User Monitoring Scope ---")
@@ -336,12 +421,14 @@ class ConfigManager:
         
         # Save configuration
         self.config = {
-            'server_url': server_url,
+            'server_base_url': server_base_url,
+            'hostname': hostname,
             'username': username,
+            'encryption_password': encryption_password,
+            'encryption_salt': 'default_salt_12345',
             'monitor_all_users': monitor_all_users,
             'specific_user': specific_user,
             'interval': interval,
-            'hostname': socket.gethostname(),
             'max_retries': CONFIG['max_retries'],
             'timeout': CONFIG['timeout'],
             'batch_size': CONFIG['batch_size'],
@@ -352,6 +439,44 @@ class ConfigManager:
         print(f"\n✅ Configuration saved to {self.config_file}")
         
         return self.config
+    
+    def register_agent(self, server_base_url, hostname, username, ip_address, encryption_password):
+        """Register agent with central server"""
+        print("\n--- Registering Agent ---")
+        
+        try:
+            registration_url = f"{server_base_url}/registrations/"
+            
+            registration_data = {
+                'hostname': hostname,
+                'username': username,
+                'ip_address': ip_address,
+                'encryption_password': encryption_password,
+                'monitoring_scope': 'all_users'
+            }
+            
+            response = requests.post(registration_url, json=registration_data, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                print("✅ Registration request submitted successfully!")
+                print(f"   Status: {result.get('status', 'unknown')}")
+                print(f"   Message: {result.get('message', 'No message')}")
+                if 'request_id' in result:
+                    print(f"   Request ID: {result['request_id']}")
+            elif response.status_code == 400:
+                error_data = response.json()
+                print(f"⚠️  Registration warning: {error_data.get('error', 'Unknown error')}")
+            else:
+                print(f"❌ Registration failed with status {response.status_code}")
+                print(f"   Response: {response.text}")
+                
+        except requests.exceptions.RequestException as e:
+            print(f"⚠️  Could not connect to server: {e}")
+            print("   You will need to register manually through the web interface.")
+        except Exception as e:
+            print(f"⚠️  Registration error: {e}")
+            print("   You will need to register manually through the web interface.")
     
     def load_config(self):
         """Load existing configuration"""
@@ -381,15 +506,227 @@ class SystemMonitor:
         self.error_count = 0
         self.max_errors = 10
         
+        # Initialize encryption
+        try:
+            self.encryption_mgr = EncryptionManager(
+                password=self.config.get('encryption_password', ''),
+                salt=self.config.get('encryption_salt', 'default_salt_12345')
+            )
+            logging.info("Encryption initialized successfully")
+        except ImportError:
+            logging.error("Cryptography library not available. Encryption disabled.")
+            self.encryption_mgr = None
+        except Exception as e:
+            logging.error(f"Failed to initialize encryption: {e}")
+            self.encryption_mgr = None
+        
+        # Agent status
+        self.agent_active = True
+        self.last_status_check = 0
+        self.status_check_interval = 600  # Check every 10 minutes
+        
+        # Endpoint URLs
+        self.logs_url = f"{self.config['server_base_url']}/logs/upload_logs/"
+        self.metrics_url = f"{self.config['server_base_url']}/metrics/upload_metrics/"
+        self.processes_url = f"{self.config['server_base_url']}/processes/upload_processes/"
+        self.config_url = f"{self.config['server_base_url']}/agents/config_by_hostname/"
+
+    def check_agent_status(self):
+        """Check if agent is active and approved on server"""
+        current_time = time.time()
+        
+        # Only check periodically to avoid too many requests
+        if current_time - self.last_status_check < self.status_check_interval:
+            return self.agent_active
+        
+        try:
+            response = requests.get(
+                self.config_url,
+                params={'hostname': self.config['hostname']},
+                timeout=5
+            )
+            
+            if response.status_code == 200:
+                config_data = response.json()
+                is_active = config_data.get('is_active', False)
+                is_approved = config_data.get('is_approved', False)
+                
+                self.agent_active = is_active and is_approved
+                self.last_status_check = current_time
+                
+                if not self.agent_active:
+                    logging.info(f"Agent status: Active={is_active}, Approved={is_approved}")
+                
+                return self.agent_active
+            elif response.status_code == 404:
+                logging.warning("Agent not found on server. Registration may be pending.")
+                self.agent_active = False
+                return False
+            else:
+                # If we can't check status, assume we can continue
+                logging.warning(f"Status check failed with status {response.status_code}")
+                return True
+                
+        except Exception as e:
+            logging.warning(f"Could not check agent status: {e}")
+            # If we can't check status, assume we can continue
+            return True
+    
+    def collect_metrics_data(self):
+        """Collect host metrics data for the metrics API"""
+        try:
+            # CPU usage
+            cpu_percent = psutil.cpu_percent(interval=1)
+
+            # Memory usage
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            memory_total = memory.total
+            memory_used = memory.used
+
+            # Disk usage
+            disk = psutil.disk_usage('/')
+            disk_percent = disk.percent
+            disk_total = disk.total
+            disk_used = disk.used
+
+            # Network usage
+            net_io = psutil.net_io_counters()
+            network_sent = net_io.bytes_sent if net_io else 0
+            network_received = net_io.bytes_recv if net_io else 0
+
+            metrics_data = {
+                'hostname': self.config['hostname'],
+                'timestamp': datetime.utcnow().isoformat(),
+                'cpu_usage': cpu_percent,
+                'memory_usage': memory_percent,
+                'memory_total': memory_total,
+                'memory_used': memory_used,
+                'disk_usage': disk_percent,
+                'disk_total': disk_total,
+                'disk_used': disk_used,
+                'network_sent': network_sent,
+                'network_received': network_received
+            }
+
+            return metrics_data
+
+        except Exception as e:
+            logging.error(f"Error collecting metrics: {e}")
+            return None
+
+    def send_metrics_to_server(self, metrics_data):
+        """Send metrics data to the metrics API endpoint"""
+        if not metrics_data:
+            return False
+
+        try:
+            response = requests.post(
+                self.metrics_url,
+                json=metrics_data,
+                timeout=self.config['timeout']
+            )
+
+            if response.status_code == 200:
+                logging.info("Metrics sent successfully")
+                return True
+            else:
+                logging.error(f"Failed to send metrics: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            logging.error(f"Error sending metrics: {e}")
+            return False
+
+    def collect_process_data_detailed(self):
+        """Collect detailed process data for the process API — returns all running processes."""
+        try:
+            processes = []
+            for proc in psutil.process_iter([
+                'pid', 'name', 'username', 'cpu_percent',
+                'memory_percent', 'cmdline', 'status'
+            ]):
+                try:
+                    proc_info = proc.info
+
+                    # Filter processes by user if config says so
+                    if not self.config.get('monitor_all_users', True):
+                        specific_user = self.config.get('specific_user')
+                        if specific_user and proc_info.get('username') != specific_user:
+                            continue
+
+                    processes.append({
+                        'pid': proc_info.get('pid'),
+                        'name': proc_info.get('name', 'unknown'),
+                        'user': proc_info.get('username', 'unknown'),
+                        'cpu_percent': proc_info.get('cpu_percent') or 0.0,
+                        'memory_percent': proc_info.get('memory_percent') or 0.0,
+                        'cmdline': proc_info.get('cmdline') or [],
+                        'status': proc_info.get('status', 'unknown'),
+                        'is_root': proc_info.get('username') == 'root'
+                    })
+
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    # Skip processes that disappeared or are restricted
+                    continue
+
+            # Sort CPU and memory separately for quick reference
+            top_cpu = sorted(processes, key=lambda x: x['cpu_percent'], reverse=True)[:10]
+            top_memory = sorted(processes, key=lambda x: x['memory_percent'], reverse=True)[:10]
+
+            # Build structured payload
+            process_data = {
+                'hostname': self.config.get('hostname', os.uname().nodename),
+                'timestamp': datetime.utcnow().isoformat(),
+                'process_system_activity': {
+                    'total_processes': len(processes),
+                    'root_processes': sum(1 for p in processes if p['is_root']),
+                    'top_cpu_processes': top_cpu,
+                    'top_memory_processes': top_memory,
+                    'load_average': list(os.getloadavg()) if hasattr(os, 'getloadavg') else [0, 0, 0],
+                    'all_processes': processes  # full list for the frontend or API
+                }
+            }
+
+            return process_data
+
+        except Exception as e:
+            logging.exception(f"Error collecting process data: {e}")
+            return None
+
+
+    def send_processes_to_server(self, process_data):
+        """Send process data to the processes API endpoint"""
+        if not process_data:
+            return False
+
+        try:
+            response = requests.post(
+                self.processes_url,
+                json=process_data,
+                timeout=self.config['timeout']
+            )
+
+            if response.status_code == 200:
+                logging.info("Processes sent successfully")
+                return True
+            else:
+                logging.error(f"Failed to send processes: {response.status_code} - {response.text}")
+                return False
+
+        except Exception as e:
+            logging.error(f"Error sending processes: {e}")
+            return False
+    
     def collect_all_data(self):
-        """Collect all system monitoring data"""
+        """Collect all system monitoring data for logs"""
         try:
             data = {
                 'timestamp': datetime.utcnow().isoformat(),
                 'hostname': self.config['hostname'],
                 'users_logged_in': self.collect_logged_in_users(),
                 'authentication': self.collect_authentication_data(),
-                'process_system_activity': self.collect_process_data(),
+                'process_system_activity': self.collect_process_summary(),
                 'network_connection': self.collect_network_data(),
                 'file_directory_integrity': self.collect_file_integrity_data(),
                 'package_software_integrity': self.collect_package_data(),
@@ -408,6 +745,50 @@ class SystemMonitor:
             logging.error(error_msg)
             self.record_error(error_msg)
             return {'timestamp': datetime.utcnow().isoformat(), 'collection_error': error_msg}
+    
+    def collect_process_summary(self):
+        """Collect summary process data for logs (not detailed list)"""
+        try:
+            processes = []
+            for proc in psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_percent', 'cmdline']):
+                try:
+                    proc_info = proc.info
+                    
+                    # Filter by user if specific user monitoring
+                    if not self.config['monitor_all_users']:
+                        specific_user = self.config.get('specific_user')
+                        if proc_info['username'] != specific_user:
+                            continue
+                    
+                    processes.append({
+                        'pid': proc_info['pid'],
+                        'name': proc_info['name'],
+                        'user': proc_info['username'],
+                        'cpu_percent': proc_info['cpu_percent'] or 0.0,
+                        'memory_percent': proc_info['memory_percent'] or 0.0,
+                        'cmdline': proc_info['cmdline'] or [],
+                        'is_root': proc_info['username'] == 'root'
+                    })
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            
+            # Get top CPU and memory processes (top 5 for logs)
+            top_cpu = sorted([p for p in processes if p['cpu_percent'] > 0], 
+                           key=lambda x: x['cpu_percent'], reverse=True)[:5]
+            top_memory = sorted([p for p in processes if p['memory_percent'] > 0], 
+                              key=lambda x: x['memory_percent'], reverse=True)[:5]
+            
+            return {
+                'total_processes': len(processes),
+                'root_processes': len([p for p in processes if p['is_root']]),
+                'top_cpu_processes': top_cpu,
+                'top_memory_processes': top_memory,
+                'load_average': list(os.getloadavg()) if hasattr(os, 'getloadavg') else [0, 0, 0]
+            }
+        except Exception as e:
+            error_msg = f"Error collecting process summary: {str(e)}"
+            self.record_error(error_msg)
+            return {'error': error_msg}
     
     def collect_logged_in_users(self):
         """Collect information about logged-in users"""
@@ -478,48 +859,6 @@ class SystemMonitor:
             self.record_error(error_msg)
             return {'error': error_msg}
     
-    def collect_process_data(self):
-        """Collect process and system activity data"""
-        try:
-            processes = []
-            for proc in psutil.process_iter(['pid', 'name', 'username', 'cpu_percent', 'memory_percent', 'cmdline']):
-                try:
-                    proc_info = proc.info
-                    
-                    # Filter by user if specific user monitoring
-                    if not self.config['monitor_all_users']:
-                        specific_user = self.config.get('specific_user')
-                        if proc_info['username'] != specific_user:
-                            continue
-                    
-                    processes.append({
-                        'pid': proc_info['pid'],
-                        'name': proc_info['name'],
-                        'user': proc_info['username'],
-                        'cpu_percent': proc_info['cpu_percent'],
-                        'memory_percent': proc_info['memory_percent'],
-                        'cmdline': proc_info['cmdline'],
-                        'is_root': proc_info['username'] == 'root'
-                    })
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            
-            # Get top CPU and memory processes
-            top_cpu = sorted(processes, key=lambda x: x['cpu_percent'], reverse=True)[:5]
-            top_memory = sorted(processes, key=lambda x: x['memory_percent'], reverse=True)[:5]
-            
-            return {
-                'total_processes': len(processes),
-                'root_processes': len([p for p in processes if p['is_root']]),
-                'top_cpu_processes': top_cpu,
-                'top_memory_processes': top_memory,
-                'load_average': os.getloadavg()
-            }
-        except Exception as e:
-            error_msg = f"Error collecting process data: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
-    
     def collect_network_data(self):
         """Collect network connection data"""
         try:
@@ -550,8 +889,8 @@ class SystemMonitor:
             net_io = psutil.net_io_counters()
             return {
                 'connections': connections[:20],
-                'bytes_sent': net_io.bytes_sent,
-                'bytes_recv': net_io.bytes_recv,
+                'bytes_sent': net_io.bytes_sent if net_io else 0,
+                'bytes_recv': net_io.bytes_recv if net_io else 0,
                 'open_ports': self.get_open_ports()
             }
         except Exception as e:
@@ -595,491 +934,541 @@ class SystemMonitor:
     
     # Helper methods for data collection
     def get_failed_logins(self):
-        try:
-            result = subprocess.run(['grep', 'Failed', '/var/log/auth.log'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Get failed login attempts from auth logs"""
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        failed_count = 0
+        
+        for log_file in log_files:
+            try:
+                if os.path.exists(log_file):
+                    result = subprocess.run(
+                        ['grep', '-c', 'Failed', log_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        failed_count += int(result.stdout.strip())
+            except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+                continue
+        
+        return failed_count
     
     def get_successful_logins(self):
-        try:
-            result = subprocess.run(['grep', 'Accepted', '/var/log/auth.log'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Get successful login attempts from auth logs"""
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        success_count = 0
+        
+        for log_file in log_files:
+            try:
+                if os.path.exists(log_file):
+                    result = subprocess.run(
+                        ['grep', '-c', 'Accepted', log_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        success_count += int(result.stdout.strip())
+            except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+                continue
+        
+        return success_count
     
     def get_user_changes(self):
-        try:
-            result = subprocess.run(['grep', 'useradd\\|usermod', '/var/log/auth.log'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Get user account changes from auth logs"""
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        changes_count = 0
+        
+        for log_file in log_files:
+            try:
+                if os.path.exists(log_file):
+                    result = subprocess.run(
+                        ['grep', '-c', 'useradd\\|usermod', log_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        changes_count += int(result.stdout.strip())
+            except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+                continue
+        
+        return changes_count
     
     def get_sudo_events(self):
-        try:
-            result = subprocess.run(['grep', 'sudo:', '/var/log/auth.log'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Get sudo events from auth logs"""
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        sudo_count = 0
+        
+        for log_file in log_files:
+            try:
+                if os.path.exists(log_file):
+                    result = subprocess.run(
+                        ['grep', '-c', 'sudo:', log_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        sudo_count += int(result.stdout.strip())
+            except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+                continue
+        
+        return sudo_count
     
     def get_open_ports(self):
+        """Get count of open ports"""
         try:
             result = subprocess.run(['ss', '-tuln'], capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+            if result.returncode == 0:
+                lines = [line for line in result.stdout.split('\n') if line.strip() and not line.startswith('State')]
+                return len(lines)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return 0
     
     def get_recently_modified_files(self):
+        """Get count of recently modified files in /etc"""
         try:
-            result = subprocess.run(['find', '/etc', '-type', 'f', '-mtime', '-1'], 
-                                  capture_output=True, text=True, timeout=10)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+            result = subprocess.run(
+                ['find', '/etc', '-type', 'f', '-mtime', '-1'],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode == 0:
+                files = [f for f in result.stdout.split('\n') if f.strip()]
+                return len(files)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return 0
     
     def get_recent_syslog(self):
-        try:
-            result = subprocess.run(['tail', '-50', '/var/log/syslog'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Get recent syslog entries count"""
+        log_files = ['/var/log/syslog', '/var/log/messages']
+        for log_file in log_files:
+            try:
+                if os.path.exists(log_file):
+                    result = subprocess.run(
+                        ['tail', '-50', log_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        lines = [line for line in result.stdout.split('\n') if line.strip()]
+                        return len(lines)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                continue
+        return 0
     
     def get_recent_auth_log(self):
-        try:
-            result = subprocess.run(['tail', '-50', '/var/log/auth.log'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Get recent auth log entries count"""
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        for log_file in log_files:
+            try:
+                if os.path.exists(log_file):
+                    result = subprocess.run(
+                        ['tail', '-50', log_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        lines = [line for line in result.stdout.split('\n') if line.strip()]
+                        return len(lines)
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                continue
+        return 0
     
     def get_selinux_status(self):
+        """Check if SELinux is enabled"""
         try:
             result = subprocess.run(['sestatus'], capture_output=True, text=True, timeout=5)
-            return 'enabled' in result.stdout.lower()
-        except:
-            return False
+            if result.returncode == 0:
+                return 'enabled' in result.stdout.lower()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return False
     
     def get_firewall_status(self):
+        """Check if firewall is active"""
+        # Try ufw first (Ubuntu)
         try:
             result = subprocess.run(['ufw', 'status'], capture_output=True, text=True, timeout=5)
-            return 'active' in result.stdout.lower()
-        except:
-            return False
+            if result.returncode == 0:
+                return 'active' in result.stdout.lower()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        
+        # Try firewalld (RHEL/CentOS)
+        try:
+            result = subprocess.run(['firewall-cmd', '--state'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                return 'running' in result.stdout.lower()
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        
+        return False
     
     def get_connected_devices(self):
+        """Get count of connected USB devices"""
         try:
             result = subprocess.run(['lsusb'], capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+            if result.returncode == 0:
+                lines = [line for line in result.stdout.split('\n') if line.strip()]
+                return len(lines)
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+        return 0
     
     def get_uptime(self):
-        return psutil.boot_time()
-    
-    def get_scheduled_tasks(self):
+        """Get system uptime"""
         try:
-            result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
+            return psutil.boot_time()
         except:
             return 0
     
+    def get_scheduled_tasks(self):
+        """Get count of scheduled tasks"""
+        try:
+            result = subprocess.run(['crontab', '-l'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                lines = [line for line in result.stdout.split('\n') if line.strip() and not line.startswith('#')]
+                return len(lines)
+        except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.CalledProcessError):
+            pass
+        return 0
+    
     def get_suspicious_processes(self):
-        suspicious_keywords = ['miner', 'backdoor', 'shell', 'reverse']
+        """Detect suspicious processes"""
+        suspicious_keywords = ['miner', 'backdoor', 'shell', 'reverse', 'botnet']
         count = 0
-        for proc in psutil.process_iter(['name']):
+        for proc in psutil.process_iter(['name', 'cmdline']):
             try:
-                if any(keyword in proc.info['name'].lower() for keyword in suspicious_keywords):
-                    count += 1
+                proc_info = proc.info
+                name = proc_info['name'] or ''
+                cmdline = ' '.join(proc_info['cmdline'] or [])
+                
+                for keyword in suspicious_keywords:
+                    if keyword in name.lower() or keyword in cmdline.lower():
+                        count += 1
+                        break
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
         return count
     
-    def get_unusual_connections(self):
-        unusual_ports = [4444, 1337, 31337, 9999]
-        count = 0
-        for conn in psutil.net_connections():
-            if conn.raddr and conn.raddr.port in unusual_ports:
-                count += 1
-        return count
-    
-    def get_dns_cache(self):
-        try:
-            result = subprocess.run(['systemd-resolve', '--statistics'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
-    
-    def get_container_count(self):
-        try:
-            result = subprocess.run(['docker', 'ps', '-q'], capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
-    
     def get_ssh_key_changes(self):
-        try:
-            result = subprocess.run(['grep', 'ssh-key', '/var/log/auth.log'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Check for SSH key file changes"""
+        ssh_files = ['/etc/ssh/ssh_host_rsa_key', '/etc/ssh/ssh_host_ecdsa_key']
+        changes = 0
+        for ssh_file in ssh_files:
+            try:
+                if os.path.exists(ssh_file):
+                    stat = os.stat(ssh_file)
+                    if time.time() - stat.st_mtime < 86400:
+                        changes += 1
+            except OSError:
+                continue
+        return changes
     
     def get_account_lockouts(self):
-        try:
-            result = subprocess.run(['grep', 'account locked', '/var/log/auth.log'], 
-                                  capture_output=True, text=True, timeout=5)
-            return len(result.stdout.split('\n')) - 1
-        except:
-            return 0
+        """Get account lockout events"""
+        log_files = ['/var/log/auth.log', '/var/log/secure']
+        lockouts = 0
+        for log_file in log_files:
+            try:
+                if os.path.exists(log_file):
+                    result = subprocess.run(
+                        ['grep', '-c', 'locked\\|lockout', log_file],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    if result.returncode == 0:
+                        lockouts += int(result.stdout.strip())
+            except (subprocess.TimeoutExpired, FileNotFoundError, ValueError):
+                continue
+        return lockouts
     
+    # Additional data collection methods
     def collect_file_integrity_data(self):
         """Collect file integrity monitoring data"""
-        try:
-            critical_files = [
-                '/etc/passwd',
-                '/etc/shadow',
-                '/etc/hosts',
-                '/etc/hostname'
-            ]
-            
-            file_stats = {}
-            for file_path in critical_files:
-                try:
-                    stat = os.stat(file_path)
-                    file_stats[file_path] = {
-                        'size': stat.st_size,
-                        'mtime': stat.st_mtime,
-                        'mode': stat.st_mode
-                    }
-                except FileNotFoundError:
-                    continue
-            
-            return {
-                'critical_files': file_stats,
-                'recently_modified': self.get_recently_modified_files()
-            }
-        except Exception as e:
-            error_msg = f"Error collecting file integrity data: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
+        return {
+            'recently_modified_files': self.get_recently_modified_files(),
+            'ssh_key_changes': self.get_ssh_key_changes()
+        }
     
     def collect_package_data(self):
         """Collect package and software integrity data"""
-        try:
-            # Get recently installed packages (Debian/Ubuntu)
-            result = subprocess.run(['dpkg-query', '-W', '-f=${Package} ${Version} ${Status}\n'], 
-                                  capture_output=True, text=True, timeout=10)
-            packages = []
-            for line in result.stdout.split('\n'):
-                if 'install ok installed' in line:
-                    pkg_info = line.split()
-                    if len(pkg_info) >= 2:
-                        packages.append({
-                            'name': pkg_info[0],
-                            'version': pkg_info[1]
-                        })
-            
-            return {'installed_packages_count': len(packages)}
-        except Exception as e:
-            logging.warning(f"Could not get package info: {e}")
-            return {'installed_packages_count': 0}
+        return {
+            'package_updates_available': 0,
+            'suspicious_packages': 0
+        }
     
     def collect_system_logs(self):
-        """Collect system log summaries"""
-        try:
-            return {
-                'syslog_entries': self.get_recent_syslog(),
-                'auth_entries': self.get_recent_auth_log()
-            }
-        except Exception as e:
-            error_msg = f"Error collecting system logs: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
+        """Collect system log data"""
+        return {
+            'recent_syslog_entries': self.get_recent_syslog(),
+            'recent_auth_entries': self.get_recent_auth_log()
+        }
     
     def collect_security_data(self):
-        """Collect security tools data"""
-        try:
-            return {
-                'selinux_status': self.get_selinux_status(),
-                'firewall_status': self.get_firewall_status()
-            }
-        except Exception as e:
-            error_msg = f"Error collecting security data: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
+        """Collect security tools status"""
+        return {
+            'selinux_enabled': self.get_selinux_status(),
+            'firewall_active': self.get_firewall_status(),
+            'antivirus_installed': False
+        }
     
     def collect_hardware_data(self):
         """Collect hardware and peripheral data"""
-        try:
-            return {
-                'connected_devices': self.get_connected_devices()
-            }
-        except Exception as e:
-            error_msg = f"Error collecting hardware data: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
+        return {
+            'connected_devices': self.get_connected_devices(),
+            'usb_devices': self.get_connected_devices()
+        }
     
     def collect_environment_data(self):
-        """Collect environment configuration data"""
-        try:
-            return {
-                'uptime': self.get_uptime(),
-                'scheduled_tasks': self.get_scheduled_tasks()
-            }
-        except Exception as e:
-            error_msg = f"Error collecting environment data: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
+        """Collect environment and configuration data"""
+        return {
+            'uptime': self.get_uptime(),
+            'scheduled_tasks': self.get_scheduled_tasks(),
+            'timezone': time.tzname[0] if time.daylight else time.tzname[1]
+        }
     
     def collect_anomaly_data(self):
-        """Collect anomaly detection data"""
-        try:
-            return {
-                'suspicious_processes': self.get_suspicious_processes(),
-                'unusual_connections': self.get_unusual_connections()
-            }
-        except Exception as e:
-            error_msg = f"Error collecting anomaly data: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
+        """Collect anomaly and threat detection data"""
+        return {
+            'suspicious_processes': self.get_suspicious_processes(),
+            'high_cpu_processes': 0,
+            'unusual_network_connections': 0
+        }
     
     def collect_other_data(self):
-        """Collect other monitoring data"""
+        """Collect other miscellaneous data"""
+        return {
+            'agent_version': '1.0.2',
+            'python_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+            'platform': sys.platform
+        }
+    
+    def send_logs_to_server(self, data):
+        """Send encrypted log data to central server"""
+        if not self.check_agent_status():
+            logging.warning("Agent is not active or approved. Skipping log send.")
+            return False
+        
         try:
-            return {
-                'dns_requests': self.get_dns_cache(),
-                'container_count': self.get_container_count()
+            timestamp = datetime.utcnow().isoformat()
+            
+            # Try with encryption first
+            if self.encryption_mgr:
+                try:
+                    # Encrypt the data
+                    encrypted_data = self.encryption_mgr.encrypt_data(data)
+                    
+                    # Prepare payload with encrypted_data field
+                    payload = {
+                        'hostname': self.config['hostname'],
+                        'username': self.config['username'],
+                        'timestamp': timestamp,
+                        'encrypted_data': encrypted_data
+                    }
+                    
+                    logging.debug(f"Sending encrypted log payload")
+                    
+                    # Send to server
+                    response = requests.post(
+                        self.logs_url,
+                        json=payload,
+                        timeout=self.config['timeout']
+                    )
+                    
+                    if response.status_code == 200:
+                        logging.info("Logs sent successfully (encrypted)")
+                        self.error_count = 0
+                        return True
+                    elif response.status_code == 403:
+                        logging.warning("Agent not authorized. Registration may be pending approval.")
+                        self.agent_active = False
+                        return False
+                    elif response.status_code == 400:
+                        error_text = response.text
+                        logging.warning(f"Encrypted upload failed (400): {error_text}")
+                        # Fall through to try unencrypted
+                    else:
+                        logging.error(f"Server returned error: {response.status_code} - {response.text}")
+                        return False
+                        
+                except Exception as encryption_error:
+                    logging.warning(f"Encryption failed: {encryption_error}, trying without encryption")
+            
+            # Try without encryption (fallback)
+            logging.info("Attempting to send logs without encryption")
+            
+            payload_unencrypted = {
+                'hostname': self.config['hostname'],
+                'username': self.config['username'],
+                'timestamp': timestamp,
+                'logs': data if isinstance(data, list) else [data]
             }
+            
+            response = requests.post(
+                self.logs_url,
+                json=payload_unencrypted,
+                timeout=self.config['timeout']
+            )
+            
+            if response.status_code == 200:
+                logging.info("Logs sent successfully (unencrypted)")
+                self.error_count = 0
+                return True
+            elif response.status_code == 403:
+                logging.warning("Agent not authorized. Registration may be pending approval.")
+                self.agent_active = False
+                return False
+            else:
+                logging.error(f"Server returned error: {response.status_code} - {response.text}")
+                return False
+                
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Network error sending logs: {e}")
+            return False
         except Exception as e:
-            error_msg = f"Error collecting other data: {str(e)}"
-            self.record_error(error_msg)
-            return {'error': error_msg}
+            logging.error(f"Error sending logs: {e}")
+            import traceback
+            logging.error(f"Traceback: {traceback.format_exc()}")
+            return False
     
-    def send_data(self, data):
-        """Send JSON data to central server with authentication"""
-        for attempt in range(self.config['max_retries']):
-            try:
-                # Prepare request - send JSON directly
-                payload = {
-                    'hostname': self.config['hostname'],
-                    'username': self.config['username'],
-                    'encrypted_data': json.dumps(data),  # Just JSON string, not encrypted
-                    'timestamp': datetime.utcnow().isoformat()
-                }
+    def run_monitoring_cycle(self):
+        """Run one monitoring cycle"""
+        try:
+            logging.info("Starting monitoring cycle...")
+            
+            # Collect and send metrics data (always sent immediately)
+            metrics_data = self.collect_metrics_data()
+            print(metrics_data)
+            if metrics_data:
+                self.send_metrics_to_server(metrics_data)
+            
+            # Collect and send process data (sent every cycle)
+            process_data = self.collect_process_data_detailed()
+            if process_data:
+                self.send_processes_to_server(process_data)
+            
+            # Collect system logs data (batched)
+            log_data = self.collect_all_data()
+            self.data_buffer.append(log_data)
+            
+            # Send logs if we have enough data or enough time has passed
+            current_time = time.time()
+            if (len(self.data_buffer) >= self.config['batch_size'] or 
+                current_time - self.last_send > self.config['interval']):
                 
-                response = requests.post(
-                    self.config['server_url'],
-                    json=payload,
-                    timeout=self.config['timeout'],
-                    headers={'Content-Type': 'application/json'}
-                )
-                
-                if response.status_code == 200:
-                    logging.info("Data sent successfully")
-                    self.error_count = 0  # Reset error count on successful send
-                    return True
-                elif response.status_code == 401:
-                    logging.error("Authentication failed - check username")
-                    self.record_error("Server authentication failed")
-                    return False
+                if self.send_logs_to_server(self.data_buffer):
+                    self.data_buffer = []
+                    self.last_send = current_time
                 else:
-                    logging.warning(f"Server returned status {response.status_code}")
-                    self.record_error(f"Server error: {response.status_code}")
-                    
-            except requests.exceptions.RequestException as e:
-                error_msg = f"Attempt {attempt + 1} failed: {e}"
-                logging.warning(error_msg)
-                self.record_error(error_msg)
-                time.sleep(2 ** attempt)  # Exponential backoff
-        
-        logging.error("All send attempts failed")
-        return False
+                    # Keep data in buffer for retry, but limit buffer size
+                    if len(self.data_buffer) > self.config['batch_size'] * 2:
+                        logging.warning("Buffer full, discarding old data")
+                        self.data_buffer = self.data_buffer[-self.config['batch_size']:]
+            
+            logging.info("Monitoring cycle completed")
+            
+        except Exception as e:
+            error_msg = f"Error in monitoring cycle: {e}"
+            logging.error(error_msg)
+            self.record_error(error_msg)
     
-    def run(self):
-        """Main monitoring loop"""
-        self.running = True
-        logging.info("System monitor started")
+    def start(self):
+        """Start the monitoring agent"""
+        logging.info("Starting Enhanced System Monitoring Agent v1.0.2")
+        logging.info(f"Hostname: {self.config['hostname']}")
+        logging.info(f"Monitoring interval: {self.config['interval']} seconds")
+        logging.info(f"Encryption: {'Enabled' if self.encryption_mgr else 'Disabled'}")
+        logging.info(f"Logs endpoint: {self.logs_url}")
+        logging.info(f"Metrics endpoint: {self.metrics_url}")
+        logging.info(f"Processes endpoint: {self.processes_url}")
         
-        while self.running:
-            try:
-                # Check if we have too many errors
-                if self.error_count > self.max_errors:
-                    logging.error("Too many errors, stopping monitor")
-                    self.stop()
-                    break
+        self.running = True
+        
+        try:
+            while self.running:
+                start_time = time.time()
                 
-                # Collect data
-                data = self.collect_all_data()
+                self.run_monitoring_cycle()
                 
-                # Add to buffer
-                self.data_buffer.append(data)
+                # Calculate sleep time to maintain interval
+                elapsed = time.time() - start_time
+                sleep_time = max(1, self.config['interval'] - elapsed)
                 
-                # Send if buffer is full or enough time has passed
-                current_time = time.time()
-                if (len(self.data_buffer) >= self.config['batch_size'] or 
-                    current_time - self.last_send >= self.config['interval']):
+                # Check for stop signal during sleep
+                for _ in range(int(sleep_time)):
+                    if not self.running:
+                        break
+                    time.sleep(1)
                     
-                    if self.data_buffer:
-                        success = self.send_data({
-                            'hostname': self.config['hostname'],
-                            'logs': self.data_buffer
-                        })
-                        if success:
-                            self.data_buffer = []
-                            self.last_send = current_time
-                
-                # Sleep briefly to avoid high CPU usage
-                time.sleep(1)
-                
-            except Exception as e:
-                error_msg = f"Error in main loop: {str(e)}"
-                logging.error(error_msg)
-                self.record_error(error_msg)
-                time.sleep(5)
+        except KeyboardInterrupt:
+            logging.info("Received interrupt signal")
+        except Exception as e:
+            logging.error(f"Unexpected error in main loop: {e}")
+            import traceback
+            logging.error(f"Traceback: {traceback.format_exc()}")
+        finally:
+            self.stop()
     
     def stop(self):
         """Stop the monitoring agent"""
+        logging.info("Stopping Enhanced System Monitoring Agent")
         self.running = False
-        logging.info("System monitor stopped")
-
-
-def setup_agent():
-    """Interactive setup for the monitoring agent"""
-    if not DEPENDENCIES_INSTALLED:
-        print("❌ Dependencies are not installed.")
-        print("Please run: python3 system_monitor.py install")
-        sys.exit(1)
-    
-    config_manager = ConfigManager(CONFIG['config_file'])
-    
-    print("=== System Monitoring Agent Setup ===")
-    
-    # Run configuration
-    config = config_manager.setup_config()
-    
-    # Test configuration
-    print("\n--- Testing Configuration ---")
-    monitor = SystemMonitor(config_manager)
-    test_data = {'test': 'data', 'timestamp': datetime.utcnow().isoformat()}
-    
-    try:
-        # Save final config
-        config_manager.save_config()
-        print(f"\n🎉 Setup completed successfully!")
-        print(f"📁 Config file: {CONFIG['config_file']}")
-        print(f"📊 Monitoring: {'All users' if config['monitor_all_users'] else 'User: ' + config['specific_user']}")
-        print(f"⏰ Interval: {config['interval']} seconds")
-        print(f"🌐 Server: {config['server_url']}")
         
-    except Exception as e:
-        print(f"❌ Setup failed: {e}")
-        sys.exit(1)
-
-
-def print_usage():
-    """Print usage information"""
-    print("""
-Enhanced System Monitoring Agent
-
-Usage:
-    python3 system_monitor.py [command]
-
-Commands:
-    install     - Install the monitoring agent (creates directories, installs dependencies, sets up systemd)
-    setup       - Configure the monitoring agent (server URL, credentials, monitoring scope)
-    (no args)   - Run the monitoring agent (requires prior setup)
-    help        - Show this help message
-
-Examples:
-    # First-time installation
-    sudo python3 system_monitor.py install
-    
-    # Configure the agent
-    sudo python3 system_monitor.py setup
-    
-    # Run the agent manually
-    sudo python3 system_monitor.py
-    
-    # Or use systemd (after install)
-    sudo systemctl start system-monitor
-    sudo systemctl enable system-monitor
-    sudo journalctl -u system-monitor -f
-
-Configuration:
-    Config file: {config_file}
-    Log file:    {log_file}
-    Install dir: {install_dir}
-""".format(**CONFIG))
+        # Send any remaining data
+        if self.data_buffer:
+            logging.info("Sending remaining log data...")
+            self.send_logs_to_server(self.data_buffer)
 
 
 def main():
     """Main entry point"""
-    
-    # Parse command line arguments
-    if len(sys.argv) > 1:
-        command = sys.argv[1].lower()
-        
-        if command == 'install':
-            success = Installer.install()
-            sys.exit(0 if success else 1)
-        
-        elif command == 'setup':
-            setup_agent()
-            return
-        
-        elif command in ['help', '-h', '--help']:
-            print_usage()
-            return
-        
+    # Check for installation mode
+    if len(sys.argv) > 1 and sys.argv[1] == 'install':
+        if Installer.install():
+            print("\n✅ Installation completed successfully!")
+            sys.exit(0)
         else:
-            print(f"Unknown command: {command}")
-            print_usage()
+            print("\n❌ Installation failed!")
             sys.exit(1)
     
-    # Check if dependencies are installed
-    if not DEPENDENCIES_INSTALLED:
-        print("❌ Required dependencies are not installed.")
-        print("\nPlease run installation first:")
-        print("  sudo python3 system_monitor.py install")
-        sys.exit(1)
+    # Check for setup mode
+    if len(sys.argv) > 1 and sys.argv[1] == 'setup':
+        config_manager = ConfigManager(CONFIG['config_file'])
+        config_manager.setup_config()
+        print("\n✅ Setup completed successfully!")
+        print("\nYou can now run the agent with:")
+        print(f"  python3 {os.path.abspath(__file__)}")
+        sys.exit(0)
     
     # Setup logging
     setup_logging()
     
-    # Load existing configuration
+    # Check dependencies
+    if not DEPENDENCIES_INSTALLED:
+        logging.error("Required dependencies not installed.")
+        logging.error("Please run: python3 system_monitor.py install")
+        sys.exit(1)
+    
+    # Load configuration
     config_manager = ConfigManager(CONFIG['config_file'])
     config = config_manager.load_config()
     
     if not config:
-        print("❌ Configuration not found. Please run setup first:")
-        print("  sudo python3 system_monitor.py setup")
+        logging.error("No configuration found. Please run setup first:")
+        logging.error("  python3 system_monitor.py setup")
         sys.exit(1)
     
-    # Check if running as root for full functionality
-    if os.geteuid() != 0:
-        logging.warning("Running without root privileges. Some monitoring features may be limited.")
+    # Check encryption password
+    if not config.get('encryption_password'):
+        logging.error("Encryption password not configured. Please run setup.")
+        sys.exit(1)
     
+    # Create and start monitor
     monitor = SystemMonitor(config_manager)
     
-    # Handle graceful shutdown
-    def signal_handler(signum, frame):
-        monitor.stop()
-        sys.exit(0)
-    
-    import signal
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
     try:
-        monitor.run()
+        monitor.start()
     except KeyboardInterrupt:
-        monitor.stop()
+        logging.info("Agent stopped by user")
+    except Exception as e:
+        logging.error(f"Agent crashed: {e}")
+        import traceback
+        logging.error(f"Traceback: {traceback.format_exc()}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -30,10 +30,16 @@ class SystemLogSerializer(serializers.ModelSerializer):
 
 class AlertSerializer(serializers.ModelSerializer):
     agent_hostname = serializers.CharField(source='agent.hostname', read_only=True)
+    alert_type_display = serializers.CharField(source='get_alert_type_display', read_only=True)
     
     class Meta:
         model = Alert
-        fields = '__all__'
+        fields = [
+            'id', 'agent', 'agent_hostname', 'title', 'description', 
+            'level', 'alert_type', 'alert_type_display', 'triggered_at',
+            'resolved', 'resolved_at', 'notes', 'metadata'
+        ]
+        read_only_fields = ['triggered_at', 'resolved_at']
 
 class UserSessionSerializer(serializers.ModelSerializer):
     agent_hostname = serializers.CharField(source='agent.hostname', read_only=True)
@@ -67,6 +73,26 @@ class HostMetricSerializer(serializers.ModelSerializer):
     class Meta:
         model = HostMetric
         fields = '__all__'
+
+class NestedMetricUploadSerializer(serializers.Serializer):
+    hostname = serializers.CharField()
+    timestamp = serializers.DateTimeField(required=False)
+    resource_anomalies = serializers.DictField(child=serializers.FloatField())
+    network_connection = serializers.DictField(child=serializers.IntegerField(), required=False)
+    
+    def create(self, validated_data):
+        resource_data = validated_data.get('resource_anomalies', {})
+        network_data = validated_data.get('network_connection', {})
+        
+        return HostMetric.objects.create(
+            agent=validated_data['agent'],
+            timestamp=validated_data.get('timestamp', timezone.now()),
+            cpu_usage=resource_data.get('cpu_percent', 0.0),
+            memory_usage=resource_data.get('memory_percent', 0.0),
+            disk_usage=resource_data.get('disk_percent', 0.0),
+            network_sent=network_data.get('bytes_sent', 0),
+            network_received=network_data.get('bytes_recv', 0)
+        )
 
 class ProcessSnapshotSerializer(serializers.ModelSerializer):
     agent_hostname = serializers.CharField(source='agent.hostname', read_only=True)

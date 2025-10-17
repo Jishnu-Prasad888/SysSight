@@ -1,0 +1,294 @@
+[
+  {
+    "timestamp": "2025-10-17T18:43:52.075592",
+    "hostname": "pop-os",
+    "users_logged_in": {
+      "total_users": 2,
+      "users": [
+        {
+          "name": "jishnu",
+          "terminal": ":1",
+          "host": "127.0.0.1",
+          "started": 1760725248.0,
+          "pid": 2119
+        },
+        {
+          "name": "jishnu",
+          "terminal": "pts/1",
+          "host": "0.0.0.0",
+          "started": 1760725632.0,
+          "pid": 4132
+        }
+      ],
+      "monitoring_scope": "all_users"
+    },
+    "authentication": {
+      "failed_login_attempts": 0,
+      "successful_logins": 6,
+      "user_changes": 2,
+      "privilege_escalation": 37,
+      "ssh_key_changes": 0,
+      "account_lockouts": 6
+    },
+    "process_system_activity": {
+      "total_processes": 265,
+      "root_processes": 175,
+      "top_cpu_processes": [],
+      "top_memory_processes": [
+        {
+          "pid": 3582,
+          "name": "io.elementary.appcenter",
+          "user": "jishnu",
+          "cpu_percent": 0.0,
+          "memory_percent": 7.215108559932965,
+          "cmdline": ["io.elementary.appcenter", "-s"],
+          "is_root": false
+        },
+        {
+          "pid": 2330,
+          "name": "gnome-shell",
+          "user": "jishnu",
+          "cpu_percent": 0.0,
+          "memory_percent": 4.607340437878873,
+          "cmdline": ["/usr/bin/gnome-shell"],
+          "is_root": false
+        },
+        {
+          "pid": 784,
+          "name": "execsnoop-bpfcc",
+          "user": "root",
+          "cpu_percent": 0.0,
+          "memory_percent": 1.7958909158775838,
+          "cmdline": ["/usr/bin/python3", "/usr/sbin/execsnoop-bpfcc"],
+          "is_root": true
+        },
+        {
+          "pid": 2100,
+          "name": "fwupd",
+          "user": "root",
+          "cpu_percent": 0.0,
+          "memory_percent": 1.4923881994878845,
+          "cmdline": ["/usr/libexec/fwupd/fwupd"],
+          "is_root": true
+        },
+        {
+          "pid": 2122,
+          "name": "Xorg",
+          "user": "jishnu",
+          "cpu_percent": 0.0,
+          "memory_percent": 1.394394956557746,
+          "cmdline": [
+            "/usr/lib/xorg/Xorg",
+            "vt2",
+            "-displayfd",
+            "3",
+            "-auth",
+            "/run/user/1000/gdm/Xauthority",
+            "-nolisten",
+            "tcp",
+            "-background",
+            "none",
+            "-noreset",
+            "-keeptty",
+            "-novtswitch",
+            "-verbose",
+            "3"
+          ],
+          "is_root": false
+        }
+      ],
+      "load_average": [0.32421875, 0.421875, 0.533203125]
+    },
+    "network_connection": {
+      "connections": [
+        {
+          "local_address": ":::5353",
+          "remote_address": null,
+          "status": "NONE",
+          "pid": 603,
+          "process_name": "avahi-daemon",
+          "process_user": "avahi"
+        },
+        {
+          "local_address": "10.50.59.222:53870",
+          "remote_address": "10.50.58.95:8000",
+          "status": "TIME_WAIT",
+          "pid": null
+        },
+        {
+          "local_address": ":::22",
+          "remote_address": null,
+          "status": "LISTEN",
+          "pid": 741,
+          "process_name": "sshd",
+          "process_user": "root"
+        },
+        {
+          "local_address": "0.0.0.0:46598",
+          "remote_address": null,
+          "status": "NONE",
+          "pid": 603,
+          "process_name": "avahi-daemon",
+          "process_user": "avahi"
+        },
+        {
+          "local_address": ":::50496",
+          "remote_address": null,
+          "status": "NONE",
+          "pid": 603,
+          "process_name": "avahi-daemon",
+          "process_user": "avahi"
+        },
+        {
+          "local_address": "0.0.0.0:22",
+          "remote_address": null,
+          "status": "LISTEN",
+          "pid": 741,
+          "process_name": "sshd",
+          "process_user": "root"
+        },
+        {
+          "local_address": "::1:631",
+          "remote_address": null,
+          "status": "LISTEN",
+          "pid": 4444,
+          "process_name": "cupsd",
+          "process_user": "root"
+        },
+        {
+          "local_address": "10.50.59.222:44670",
+          "remote_address": "10.50.58.95:8000",
+          "status": "TIME_WAIT",
+          "pid": null
+        },
+        {
+          "local_address": "10.50.59.222:50064",
+          "remote_address": "10.50.58.95:8000",
+          "status": "TIME_WAIT",
+          "pid": null
+        },
+        {
+          "local_address": "127.0.0.53:53",
+          "remote_address": null,
+          "status": "NONE",
+          "pid": 404,
+          "process_name": "systemd-resolved",
+          "process_user": "systemd-resolve"
+        },
+        {
+          "local_address": "127.0.0.53:53",
+          "remote_address": null,
+          "status": "LISTEN",
+          "pid": 404,
+          "process_name": "systemd-resolved",
+          "process_user": "systemd-resolve"
+        },
+        {
+          "local_address": "0.0.0.0:5353",
+          "remote_address": null,
+          "status": "NONE",
+          "pid": 603,
+          "process_name": "avahi-daemon",
+          "process_user": "avahi"
+        },
+        {
+          "local_address": "::1:323",
+          "remote_address": null,
+          "status": "NONE",
+          "pid": 731,
+          "process_name": "chronyd",
+          "process_user": "_chrony"
+        },
+        {
+          "local_address": "10.50.59.222:68",
+          "remote_address": "10.9.0.242:67",
+          "status": "NONE",
+          "pid": 599,
+          "process_name": "NetworkManager",
+          "process_user": "root"
+        },
+        {
+          "local_address": "10.50.59.222:53880",
+          "remote_address": "10.50.58.95:8000",
+          "status": "TIME_WAIT",
+          "pid": null
+        },
+        {
+          "local_address": "127.0.0.1:44669",
+          "remote_address": null,
+          "status": "LISTEN",
+          "pid": 717,
+          "process_name": "containerd",
+          "process_user": "root"
+        },
+        {
+          "local_address": "127.0.0.1:631",
+          "remote_address": null,
+          "status": "LISTEN",
+          "pid": 4444,
+          "process_name": "cupsd",
+          "process_user": "root"
+        },
+        {
+          "local_address": "127.0.0.1:323",
+          "remote_address": null,
+          "status": "NONE",
+          "pid": 731,
+          "process_name": "chronyd",
+          "process_user": "_chrony"
+        }
+      ],
+      "bytes_sent": 2140962,
+      "bytes_recv": 49409005,
+      "open_ports": 14
+    },
+    "file_directory_integrity": {
+      "recently_modified_files": 4,
+      "ssh_key_changes": 0
+    },
+    "package_software_integrity": {
+      "package_updates_available": 0,
+      "suspicious_packages": 0
+    },
+    "system_logs_audit": {
+      "recent_syslog_entries": 50,
+      "recent_auth_entries": 50
+    },
+    "security_tools": {
+      "selinux_enabled": false,
+      "firewall_active": true,
+      "antivirus_installed": false
+    },
+    "resource_anomalies": {
+      "cpu_percent": 1.7,
+      "memory_percent": 28.6,
+      "disk_percent": 68.4,
+      "disk_read_bytes": 1369985024,
+      "disk_write_bytes": 1155729408,
+      "zombie_processes": 0
+    },
+    "hardware_peripheral_security": {
+      "connected_devices": 3,
+      "usb_devices": 3
+    },
+    "environment_configuration": {
+      "uptime": 1760725265.0,
+      "scheduled_tasks": 0,
+      "timezone": "IST"
+    },
+    "anomaly_threat_detection": {
+      "suspicious_processes": 7,
+      "high_cpu_processes": 0,
+      "unusual_network_connections": 0
+    },
+    "other": {
+      "agent_version": "1.0.1",
+      "python_version": "3.10.12",
+      "platform": "linux"
+    },
+    "agent_errors": {
+      "total_errors": 0,
+      "high_error_rate": false
+    }
+  }
+]

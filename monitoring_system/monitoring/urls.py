@@ -15,6 +15,8 @@ router.register(r'metrics', views.HostMetricViewSet, basename='metrics')
 router.register(r'processes', views.ProcessViewSet, basename='processes')
 router.register(r'thresholds', views.ResourceThresholdViewSet)
 router.register(r'notifications', views.NotificationChannelViewSet)
+router.register(r'alerts', views.AlertViewSet, basename='alerts')
+
 
 # CSRF token endpoint
 @ensure_csrf_cookie
