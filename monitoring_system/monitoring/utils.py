@@ -1,6 +1,3 @@
-"""
-Utility functions for monitoring system
-"""
 import base64
 import json
 from cryptography.fernet import Fernet
@@ -8,16 +5,19 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 
-class DecryptionManager:
-    """Handles decryption of data from monitoring agents"""
+class EncryptionManager:
+    """Handles encryption and decryption of data"""
     
-    def __init__(self):
-        self.fernet = None
+    def __init__(self, password=None, salt=None):
+        if password and salt:
+            self.initialize_from_password(password, salt)
+        else:
+            self.fernet = None
     
     def generate_key_from_password(self, password, salt):
         """Generate encryption key from password and salt"""
         if isinstance(salt, str):
-            salt = base64.urlsafe_b64decode(salt.encode())
+            salt = salt.encode()
         
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
@@ -29,9 +29,23 @@ class DecryptionManager:
         return key
     
     def initialize_from_password(self, password, salt):
-        """Initialize decryption with password and salt"""
+        """Initialize encryption with password and salt"""
         key = self.generate_key_from_password(password, salt)
         self.fernet = Fernet(key)
+    
+    def encrypt_data(self, data):
+        """Encrypt data before sending to server"""
+        if not self.fernet:
+            raise ValueError("Encryption not initialized")
+        
+        if isinstance(data, dict):
+            data = json.dumps(data)
+        
+        if isinstance(data, str):
+            data = data.encode()
+        
+        encrypted_bytes = self.fernet.encrypt(data)
+        return base64.urlsafe_b64encode(encrypted_bytes).decode()
     
     def decrypt_data(self, encrypted_data):
         """Decrypt data received from agent"""
@@ -39,11 +53,8 @@ class DecryptionManager:
             raise ValueError("Decryption not initialized")
         
         try:
-            # Decode the base64 encoded encrypted data
             encrypted_bytes = base64.urlsafe_b64decode(encrypted_data.encode())
-            # Decrypt
             decrypted_data = self.fernet.decrypt(encrypted_bytes)
-            # Parse JSON
             return json.loads(decrypted_data.decode())
         except Exception as e:
             raise ValueError(f"Decryption failed: {str(e)}")
@@ -115,26 +126,7 @@ class AlertGenerator:
                     'level': 'high'
                 })
             
-            # Check for zombie processes
-            zombie_processes = resource_data.get('zombie_processes', 0)
-            if zombie_processes > 5:
-                alerts.append({
-                    'title': 'Multiple Zombie Processes',
-                    'description': f'{zombie_processes} zombie processes detected',
-                    'level': 'medium'
-                })
-            
-            # Check for agent errors
-            agent_errors = log_entry.get('agent_errors', {})
-            if agent_errors.get('high_error_rate', False):
-                alerts.append({
-                    'title': 'Agent Error Rate High',
-                    'description': 'Monitoring agent experiencing high error rate',
-                    'level': 'medium'
-                })
-            
         except Exception as e:
-            # Don't let alert generation failures crash the whole process
             print(f"Error generating alerts: {e}")
         
         return alerts

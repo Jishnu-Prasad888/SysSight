@@ -1,191 +1,201 @@
-import React from 'react';
-import { useMonitoring } from '../context/MonitoringContext';
-import {
-  LineChart, Line, AreaChart, Area, BarChart, Bar,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
-} from 'recharts';
+// src/components/Dashboard.jsx - FIXED VERSION
+import React, { useState, useEffect } from 'react';
+import { getAgents, getStats, getMetrics } from '../services/api';
+import MetricCard from './MetricCard';
+import HostList from './HostList';
+import RealTimeChart from './RealTimeChart';
 
-const Dashboard = () => {
-  const { stats, metrics, alerts, loading } = useMonitoring();
+const Dashboard = ({ onHostSelect }) => {
+    const [agents, setAgents] = useState([]);
+    const [stats, setStats] = useState({
+        total_agents: 0,
+        active_agents: 0,
+        pending_registrations: 0,
+        recent_logs_count: 0,
+        alerts_count: 0
+    });
+    const [recentMetrics, setRecentMetrics] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
 
-  // Safe data handling
-  const safeAlerts = Array.isArray(alerts) ? alerts : [];
-  const safeStats = stats || {};
-  const safeMetrics = metrics || {};
+    useEffect(() => {
+        loadDashboardData();
+        const interval = setInterval(loadDashboardData, 30000); // 30 seconds
 
-  const StatCard = ({ title, value, color, icon }) => (
-    <div className={`bg-white rounded-lg shadow p-6 border-l-4 ${color}`}>
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-lg font-semibold text-gray-600">{title}</h3>
-          <p className="text-3xl font-bold text-gray-800">{value}</p>
-        </div>
-        <span className="text-2xl">{icon}</span>
-      </div>
-    </div>
-  );
+        return () => clearInterval(interval);
+    }, []);
 
-  const AlertCard = ({ alert }) => (
-    <div className={`p-4 rounded-lg border-l-4 ${alert.level === 'critical' ? 'border-red-500 bg-red-50' :
-        alert.level === 'high' ? 'border-orange-500 bg-orange-50' :
-          alert.level === 'medium' ? 'border-yellow-500 bg-yellow-50' :
-            'border-blue-500 bg-blue-50'
-      }`}>
-      <div className="flex justify-between items-start">
-        <div>
-          <h4 className="font-semibold">{alert.title}</h4>
-          <p className="text-sm text-gray-600">{alert.description}</p>
-        </div>
-        <span className={`px-2 py-1 rounded text-xs font-medium ${alert.level === 'critical' ? 'bg-red-100 text-red-800' :
-            alert.level === 'high' ? 'bg-orange-100 text-orange-800' :
-              alert.level === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                'bg-blue-100 text-blue-800'
-          }`}>
-          {alert.level}
-        </span>
-      </div>
-      <p className="text-xs text-gray-500 mt-2">
-        {new Date(alert.triggered_at).toLocaleString()}
-      </p>
-    </div>
-  );
+    const loadDashboardData = async () => {
+        try {
+            setError(null);
+            console.log('Loading dashboard data...');
 
-  // Sample data for demonstration
-  const sampleCpuData = [
-    { timestamp: '14:00', avg_cpu: 25 },
-    { timestamp: '14:05', avg_cpu: 30 },
-    { timestamp: '14:10', avg_cpu: 45 },
-    { timestamp: '14:15', avg_cpu: 35 },
-    { timestamp: '14:20', avg_cpu: 28 },
-  ];
+            // Load all data in parallel
+            const [agentsData, statsData, metricsData] = await Promise.all([
+                getAgents().catch(e => { console.error('Agents error:', e); return []; }),
+                getStats().catch(e => { console.error('Stats error:', e); return {}; }),
+                getMetrics({ hours: 1 }).catch(e => { console.error('Metrics error:', e); return []; })
+            ]);
 
-  const sampleMemoryData = [
-    { timestamp: '14:00', avg_memory: 60 },
-    { timestamp: '14:05', avg_memory: 65 },
-    { timestamp: '14:10', avg_memory: 70 },
-    { timestamp: '14:15', avg_memory: 68 },
-    { timestamp: '14:20', avg_memory: 62 },
-  ];
+            console.log('Agents:', agentsData);
+            console.log('Stats:', statsData);
+            console.log('Metrics:', metricsData);
 
-  const sampleFailedLogins = [
-    { hour: '14:00', total_failed: 2 },
-    { hour: '15:00', total_failed: 5 },
-    { hour: '16:00', total_failed: 1 },
-    { hour: '17:00', total_failed: 8 },
-    { hour: '18:00', total_failed: 3 },
-  ];
+            setAgents(Array.isArray(agentsData) ? agentsData : []);
+            setStats(statsData || {
+                total_agents: 0,
+                active_agents: 0,
+                pending_registrations: 0,
+                recent_logs_count: 0,
+                alerts_count: 0
+            });
+            setRecentMetrics(Array.isArray(metricsData) ? metricsData.slice(0, 20) : []);
 
-  // Use safe data with fallbacks
-  const cpuData = Array.isArray(safeMetrics.cpu_usage) && safeMetrics.cpu_usage.length > 0 ? safeMetrics.cpu_usage : sampleCpuData;
-  const memoryData = Array.isArray(safeMetrics.memory_usage) && safeMetrics.memory_usage.length > 0 ? safeMetrics.memory_usage : sampleMemoryData;
-  const failedLoginsData = Array.isArray(safeMetrics.failed_logins) && safeMetrics.failed_logins.length > 0 ? safeMetrics.failed_logins : sampleFailedLogins;
+        } catch (error) {
+            console.error('Failed to load dashboard data:', error);
+            setError('Failed to load dashboard data. Please check your connection.');
+            setAgents([]);
+            setStats({
+                total_agents: 0,
+                active_agents: 0,
+                pending_registrations: 0,
+                recent_logs_count: 0,
+                alerts_count: 0
+            });
+            setRecentMetrics([]);
+        } finally {
+            setLoading(false);
+        }
+    };
 
-  if (loading) {
+    if (loading) {
+        return (
+            <div className="p-6 flex items-center justify-center h-full">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                    <div className="text-lg">Loading dashboard...</div>
+                </div>
+            </div>
+        );
+    }
+
+    if (error) {
+        return (
+            <div className="p-6">
+                <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
+                    <p className="text-red-700">{error}</p>
+                    <button
+                        onClick={loadDashboardData}
+                        className="mt-2 bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700"
+                    >
+                        Retry
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Loading dashboard data...</p>
+        <div className="p-6 space-y-6">
+            <div className="flex justify-between items-center">
+                <h1 className="text-2xl font-bold">Dashboard</h1>
+                <button
+                    onClick={loadDashboardData}
+                    className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 flex items-center space-x-2"
+                >
+                    <span>🔄</span>
+                    <span>Refresh</span>
+                </button>
+            </div>
+
+            {/* Stats Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <MetricCard
+                    title="Total Agents"
+                    value={stats.total_agents || 0}
+                    icon="🖥️"
+                    color="blue"
+                />
+                <MetricCard
+                    title="Active Agents"
+                    value={stats.active_agents || 0}
+                    icon="✅"
+                    color="green"
+                />
+                <MetricCard
+                    title="Pending Registrations"
+                    value={stats.pending_registrations || 0}
+                    icon="⏳"
+                    color="yellow"
+                />
+                <MetricCard
+                    title="Active Alerts"
+                    value={stats.alerts_count || 0}
+                    icon="🚨"
+                    color="red"
+                />
+            </div>
+
+            {/* Main Content Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Real-time Metrics Chart */}
+                <div className="lg:col-span-2">
+                    <div className="bg-white rounded-lg shadow p-6">
+                        <h2 className="text-xl font-bold mb-4">Real-time Metrics</h2>
+                        {recentMetrics.length === 0 ? (
+                            <div className="h-64 flex items-center justify-center text-gray-500">
+                                <div className="text-center">
+                                    <p className="mb-2">No metrics data available</p>
+                                    <p className="text-sm">Waiting for agents to send data...</p>
+                                </div>
+                            </div>
+                        ) : (
+                            <RealTimeChart metrics={recentMetrics} />
+                        )}
+                    </div>
+                </div>
+
+                {/* Hosts List */}
+                <div className="bg-white rounded-lg shadow p-6">
+                    <h2 className="text-xl font-bold mb-4">Hosts ({agents.length})</h2>
+                    {agents.length === 0 ? (
+                        <div className="text-center py-8 text-gray-500">
+                            <p className="mb-2">No agents registered</p>
+                            <p className="text-sm">Run the setup on your hosts to register agents</p>
+                        </div>
+                    ) : (
+                        <HostList
+                            agents={agents}
+                            onHostSelect={onHostSelect}
+                        />
+                    )}
+                </div>
+            </div>
+
+            {/* Recent Logs Summary */}
+            <div className="bg-white rounded-lg shadow p-6">
+                <h2 className="text-xl font-bold mb-4">System Status</h2>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="border rounded-lg p-4">
+                        <p className="text-sm text-gray-600">Recent Logs (24h)</p>
+                        <p className="text-2xl font-bold text-blue-600">{stats.recent_logs_count || 0}</p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                        <p className="text-sm text-gray-600">Active Monitoring</p>
+                        <p className="text-2xl font-bold text-green-600">
+                            {agents.filter(a => a.is_active && a.is_approved).length}
+                        </p>
+                    </div>
+                    <div className="border rounded-lg p-4">
+                        <p className="text-sm text-gray-600">Inactive/Pending</p>
+                        <p className="text-2xl fpont-bold text-orange-600">
+                            {agents.filter(a => !a.is_active || !a.is_approved).length}
+                        </p>
+                    </div>
+                </div>
+            </div>
         </div>
-      </div>
     );
-  }
-
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard
-          title="Total Agents"
-          value={safeStats.total_agents || 0}
-          color="border-blue-500"
-          icon="🖥️"
-        />
-        <StatCard
-          title="Active Agents"
-          value={safeStats.active_agents || 0}
-          color="border-green-500"
-          icon="✅"
-        />
-        <StatCard
-          title="Recent Logs"
-          value={safeStats.recent_logs_count || 0}
-          color="border-purple-500"
-          icon="📊"
-        />
-        <StatCard
-          title="Active Alerts"
-          value={safeStats.alerts_count || 0}
-          color="border-red-500"
-          icon="🚨"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* CPU Usage Chart */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">CPU Usage (%)</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={cpuData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="timestamp" />
-              <YAxis />
-              <Tooltip />
-              <Area type="monotone" dataKey="avg_cpu" stroke="#8884d8" fill="#8884d8" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Memory Usage Chart */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">Memory Usage (%)</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <AreaChart data={memoryData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="timestamp" />
-              <YAxis />
-              <Tooltip />
-              <Area type="monotone" dataKey="avg_memory" stroke="#82ca9d" fill="#82ca9d" />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Failed Logins Chart */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">Failed Login Attempts</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={failedLoginsData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="hour" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="total_failed" fill="#ff7300" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-
-        {/* Recent Alerts */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">Recent Alerts</h3>
-          <div className="space-y-4 max-h-80 overflow-y-auto">
-            {safeAlerts.slice(0, 5).map(alert => (
-              <AlertCard key={alert.id} alert={alert} />
-            ))}
-            {safeAlerts.length === 0 && (
-              <div className="text-center py-8">
-                <span className="text-4xl">🎉</span>
-                <p className="text-gray-500 mt-2">No active alerts</p>
-                <p className="text-sm text-gray-400 mt-1">
-                  All systems are running smoothly
-                </p>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
 };
 
 export default Dashboard;

@@ -44,7 +44,7 @@ class MonitoringAgentViewSet(viewsets.ModelViewSet):
                 'recent_logs_count': recent_logs_count,
                 'alerts_count': alerts_count,
             }
-            return Response(stats)
+            return Response(stats)  # This returns a direct object, not paginated
         except Exception as e:
             return Response({
                 'total_agents': 0,
@@ -245,7 +245,6 @@ class SystemLogViewSet(viewsets.ModelViewSet):
         try:
             data = request.data
             logger.info(f"Received log upload request with keys: {list(data.keys())}")
-            
             # Get required fields
             hostname = data.get('hostname')
             username = data.get('username')
@@ -280,6 +279,12 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                         salt=agent.encryption_salt
                     )
                     decrypted_data = encryption_mgr.decrypt_data(data['encrypted_data'])
+                    print("#"*30)
+                    print("DECRYPTED DATA","32")
+                    print("DECRYPTED DATA","32")
+                    print("DECRYPTED DATA","32")
+                    print(decrypted_data)
+                    print("#"*30)
                     logger.info("Successfully decrypted data")
                     
                     # Decrypted data should be a list or single dict
@@ -319,8 +324,6 @@ class SystemLogViewSet(viewsets.ModelViewSet):
             # Process the logs
             logs_processed = 0
             alerts_generated = 0
-            metrics_saved = 0
-            sessions_saved = 0
             
             for log_entry in log_entries:
                 try:
@@ -329,21 +332,16 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                         logger.warning(f"Skipping non-dict log entry: {type(log_entry)}")
                         continue
                     
-                    # Parse timestamp
+                    # Save system log - handle timezone properly
                     timestamp = log_entry.get('timestamp')
                     if isinstance(timestamp, str):
                         timestamp = timestamp.replace('Z', '+00:00')
-                        try:
-                            timestamp = datetime.fromisoformat(timestamp)
-                        except ValueError:
-                            timestamp = datetime.strptime(timestamp, '%Y-%m-%dT%H:%M:%S.%f')
-                        
+                        timestamp = datetime.fromisoformat(timestamp)
                         if timezone.is_naive(timestamp):
                             timestamp = timezone.make_aware(timestamp)
                     elif timestamp is None:
                         timestamp = timezone.now()
                     
-                    # Save system log
                     system_log = SystemLog.objects.create(
                         agent=agent,
                         timestamp=timestamp,
@@ -351,140 +349,57 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                     )
                     logs_processed += 1
                     
-                    # Extract and save host metrics from resource_anomalies
-                    resource_data = log_entry.get('resource_anomalies', {})
-                    if resource_data:
-                        try:
-                            # Get network data
-                            network_data = log_entry.get('network_connection', {})
-                            
-                            # Get disk usage percentage from resource_anomalies
-                            disk_percent = resource_data.get('disk_percent', 0.0)
-                            
-                            # Calculate disk totals (assuming disk_percent is accurate)
-                            disk_read_bytes = resource_data.get('disk_read_bytes', 0)
-                            disk_write_bytes = resource_data.get('disk_write_bytes', 0)
-                            
-                            # Estimate disk total and used from percentage
-                            # This is an approximation - adjust if you have actual values
-                            estimated_disk_total = 1000 * 1024 * 1024 * 1024  # 1TB default
-                            disk_used = int(estimated_disk_total * (disk_percent / 100))
-                            
-                            # Get memory data
-                            memory_percent = resource_data.get('memory_percent', 0.0)
-                            # Estimate memory total (adjust based on your systems)
-                            estimated_memory_total = 16 * 1024 * 1024 * 1024  # 16GB default
-                            memory_used = int(estimated_memory_total * (memory_percent / 100))
-                            
-                            host_metric = HostMetric.objects.create(
-                                agent=agent,
-                                timestamp=timestamp,
-                                cpu_usage=resource_data.get('cpu_percent', 0.0),
-                                memory_usage=memory_percent,
-                                memory_total=estimated_memory_total,
-                                memory_used=memory_used,
-                                disk_usage=disk_percent,
-                                disk_total=estimated_disk_total,
-                                disk_used=disk_used,
-                                network_sent=network_data.get('bytes_sent', 0),
-                                network_received=network_data.get('bytes_recv', 0)
-                            )
-                            metrics_saved += 1
-                            
-                            # Check thresholds and generate alerts if needed
-                            self._check_resource_thresholds(agent, host_metric)
-                            
-                        except Exception as metric_error:
-                            logger.error(f"Error saving host metric: {metric_error}")
-                    
                     # Save user sessions
-                    users_data = log_entry.get('users_logged_in', {})
-                    if isinstance(users_data, dict):
-                        users_list = users_data.get('users', [])
-                        for user_data in users_list:
+                    users_logged_in = log_entry.get('users_logged_in', {})
+                    if isinstance(users_logged_in, dict):
+                        for user_data in users_logged_in.get('users', []):
                             try:
                                 login_time = user_data.get('started', 0)
                                 if isinstance(login_time, (int, float)):
-                                    if login_time > 0:
-                                        login_time = datetime.fromtimestamp(login_time, tz=timezone.utc)
-                                    else:
-                                        login_time = timestamp
-                                    
+                                    login_time = datetime.fromtimestamp(login_time, tz=timezone.utc)
                                     if timezone.is_naive(login_time):
                                         login_time = timezone.make_aware(login_time)
                                 
-                                # Normalize host address
+                                # Validate host
                                 host = user_data.get('host', '0.0.0.0')
                                 if host in [':1', '::1']:
                                     host = '127.0.0.1'
                                 elif not host or host == ':0.0.0.0' or host.startswith(':'):
                                     host = '0.0.0.0'
                                 
-                                # Check if session already exists
-                                session_exists = UserSession.objects.filter(
+                                UserSession.objects.create(
                                     agent=agent,
                                     username=user_data.get('name', 'unknown'),
-                                    pid=user_data.get('pid', 0),
-                                    login_time=login_time
-                                ).exists()
-                                
-                                if not session_exists:
-                                    UserSession.objects.create(
-                                        agent=agent,
-                                        username=user_data.get('name', 'unknown'),
-                                        terminal=user_data.get('terminal', 'unknown'),
-                                        host=host,
-                                        login_time=login_time,
-                                        pid=user_data.get('pid', 0)
-                                    )
-                                    sessions_saved += 1
-                                    
+                                    terminal=user_data.get('terminal', 'unknown'),
+                                    host=host,
+                                    login_time=login_time,
+                                    pid=user_data.get('pid', 0)
+                                )
                             except Exception as user_error:
                                 logger.warning(f"Error saving user session: {user_error}")
                     
-                    # Save process snapshot if available
-                    process_data = log_entry.get('process_system_activity', {})
-                    if process_data:
-                        try:
-                            # Store complete process information
-                            processes_info = {
-                                'total_processes': process_data.get('total_processes', 0),
-                                'root_processes': process_data.get('root_processes', 0),
-                                'top_cpu_processes': process_data.get('top_cpu_processes', []),
-                                'top_memory_processes': process_data.get('top_memory_processes', []),
-                                'load_average': process_data.get('load_average', [])
-                            }
-                            
-                            ProcessSnapshot.objects.create(
-                                agent=agent,
-                                timestamp=timestamp,
-                                processes=processes_info
-                            )
-                        except Exception as process_error:
-                            logger.warning(f"Error saving process snapshot: {process_error}")
-                    
-                    # Generate security alerts
-                    try:
-                        alerts = self._generate_security_alerts(agent, log_entry, timestamp)
-                        alerts_generated += len(alerts)
-                    except Exception as alert_error:
-                        logger.error(f"Error generating alerts: {alert_error}")
+                    # Generate alerts
+                    alerts = AlertGenerator.generate_alerts(agent, log_entry)
+                    for alert_data in alerts:
+                        Alert.objects.create(
+                            agent=agent,
+                            **alert_data
+                        )
+                    alerts_generated += len(alerts)
                     
                 except Exception as log_error:
                     logger.error(f"Error processing log entry: {log_error}")
                     import traceback
                     logger.error(f"Traceback: {traceback.format_exc()}")
                     continue
-            
-            logger.info(f"Successfully processed {logs_processed} logs, saved {metrics_saved} metrics, {sessions_saved} sessions, generated {alerts_generated} alerts")
+                
+            logger.info(f"Successfully processed {logs_processed} logs, generated {alerts_generated} alerts")
             
             return Response({
                 'status': 'success',
                 'agent_id': agent.id,
                 'agent_hostname': agent.hostname,
                 'logs_processed': logs_processed,
-                'metrics_saved': metrics_saved,
-                'sessions_saved': sessions_saved,
                 'alerts_generated': alerts_generated
             })
             
@@ -496,139 +411,6 @@ class SystemLogViewSet(viewsets.ModelViewSet):
                 {'error': 'Failed to process logs', 'details': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
-    def _generate_security_alerts(self, agent, log_entry, timestamp):
-        """Generate security alerts based on log data"""
-        alerts_created = []
-        
-        try:
-            # Check authentication issues
-            auth_data = log_entry.get('authentication', {})
-            failed_logins = auth_data.get('failed_login_attempts', 0)
-            
-            if failed_logins > 5:
-                alert = self._create_alert_if_not_exists(
-                    agent=agent,
-                    title="High failed login attempts",
-                    description=f"Detected {failed_logins} failed login attempts on {agent.hostname}",
-                    level='high',
-                    timestamp=timestamp
-                )
-                if alert:
-                    alerts_created.append(alert)
-            
-            # Check privilege escalation
-            privilege_escalation = auth_data.get('privilege_escalation', 0)
-            if privilege_escalation > 50:
-                alert = self._create_alert_if_not_exists(
-                    agent=agent,
-                    title="Excessive privilege escalation",
-                    description=f"Detected {privilege_escalation} privilege escalation events on {agent.hostname}",
-                    level='medium',
-                    timestamp=timestamp
-                )
-                if alert:
-                    alerts_created.append(alert)
-            
-            # Check for suspicious processes
-            anomaly_data = log_entry.get('anomaly_threat_detection', {})
-            suspicious_processes = anomaly_data.get('suspicious_processes', 0)
-            
-            if suspicious_processes > 10:
-                alert = self._create_alert_if_not_exists(
-                    agent=agent,
-                    title="Suspicious processes detected",
-                    description=f"Detected {suspicious_processes} suspicious processes on {agent.hostname}",
-                    level='high',
-                    timestamp=timestamp
-                )
-                if alert:
-                    alerts_created.append(alert)
-            
-            # Check zombie processes
-            resource_data = log_entry.get('resource_anomalies', {})
-            zombie_count = resource_data.get('zombie_processes', 0)
-            
-            if zombie_count > 5:
-                alert = self._create_alert_if_not_exists(
-                    agent=agent,
-                    title="High zombie process count",
-                    description=f"Detected {zombie_count} zombie processes on {agent.hostname}",
-                    level='medium',
-                    timestamp=timestamp
-                )
-                if alert:
-                    alerts_created.append(alert)
-            
-        except Exception as e:
-            logger.error(f"Error generating security alerts: {e}")
-        
-        return alerts_created
-    
-    def _create_alert_if_not_exists(self, agent, title, description, level, timestamp):
-        """Create alert only if similar alert doesn't exist recently"""
-        recent_time = timezone.now() - timedelta(minutes=30)
-        
-        # Check for existing similar unresolved alerts
-        existing = Alert.objects.filter(
-            agent=agent,
-            title=title,
-            resolved=False,
-            triggered_at__gte=recent_time
-        ).exists()
-        
-        if not existing:
-            alert = Alert.objects.create(
-                agent=agent,
-                title=title,
-                description=description,
-                level=level,
-                triggered_at=timestamp,
-                resolved=False
-            )
-            logger.info(f"Created alert: {title} (Level: {level})")
-            return alert
-        
-        return None
-    
-    def _check_resource_thresholds(self, agent, metric):
-        """Check resource thresholds and generate alerts"""
-        thresholds = ResourceThreshold.objects.filter(is_active=True)
-        
-        for threshold in thresholds:
-            try:
-                should_alert = False
-                current_value = 0
-                resource_type = ''
-                
-                if threshold.resource_type == 'cpu' and metric.cpu_usage > threshold.threshold_value:
-                    should_alert = True
-                    current_value = metric.cpu_usage
-                    resource_type = 'CPU'
-                
-                elif threshold.resource_type == 'memory' and metric.memory_usage > threshold.threshold_value:
-                    should_alert = True
-                    current_value = metric.memory_usage
-                    resource_type = 'Memory'
-                
-                elif threshold.resource_type == 'disk' and metric.disk_usage > threshold.threshold_value:
-                    should_alert = True
-                    current_value = metric.disk_usage
-                    resource_type = 'Disk'
-                
-                if should_alert:
-                    alert_level = 'critical' if current_value > 95 else 'high' if current_value > 85 else 'medium'
-                    
-                    self._create_alert_if_not_exists(
-                        agent=agent,
-                        title=f"{resource_type} threshold exceeded: {threshold.name}",
-                        description=f"{resource_type} usage {current_value:.1f}% exceeds threshold {threshold.threshold_value}% on {agent.hostname}",
-                        level=alert_level,
-                        timestamp=metric.timestamp
-                    )
-                        
-            except Exception as e:
-                logger.error(f"Error checking threshold {threshold.name}: {str(e)}")
 
 class AlertViewSet(viewsets.ModelViewSet):
     queryset = Alert.objects.all().order_by('-triggered_at')
@@ -692,27 +474,6 @@ class AlertViewSet(viewsets.ModelViewSet):
 class UserSessionViewSet(viewsets.ModelViewSet):
     queryset = UserSession.objects.all().order_by('-login_time')
     serializer_class = UserSessionSerializer
-    
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        
-        # Filter by agent
-        agent_id = self.request.query_params.get('agent_id')
-        if agent_id and agent_id != 'null':
-            try:
-                queryset = queryset.filter(agent_id=int(agent_id))
-            except (ValueError, TypeError):
-                pass
-        
-        # Filter by time range
-        hours = self.request.query_params.get('hours', 24)
-        try:
-            time_threshold = timezone.now() - timedelta(hours=int(hours))
-            queryset = queryset.filter(login_time__gte=time_threshold)
-        except (ValueError, TypeError):
-            pass
-        
-        return queryset
 
 class HostMetricViewSet(viewsets.ModelViewSet):
     queryset = HostMetric.objects.all().order_by('-timestamp')
@@ -772,9 +533,6 @@ class HostMetricViewSet(viewsets.ModelViewSet):
                 network_received=data['network_received']
             )
             
-            # Check thresholds
-            self._check_thresholds(agent, metric)
-            
             return Response({
                 'status': 'success',
                 'metric_id': metric.id
@@ -801,23 +559,23 @@ class HostMetricViewSet(viewsets.ModelViewSet):
                     metric.cpu_usage > threshold.threshold_value):
                     should_alert = True
                     current_value = metric.cpu_usage
-                    resource_type = 'CPU'
+                    resource_type = 'cpu'
                 
                 elif (threshold.resource_type == 'memory' and 
                       metric.memory_usage > threshold.threshold_value):
                     should_alert = True
                     current_value = metric.memory_usage
-                    resource_type = 'Memory'
+                    resource_type = 'memory'
                 
                 elif (threshold.resource_type == 'disk' and 
                       metric.disk_usage > threshold.threshold_value):
                     should_alert = True
                     current_value = metric.disk_usage
-                    resource_type = 'Disk'
+                    resource_type = 'disk'
                 
                 if should_alert:
                     if self._should_create_alert(agent, threshold, resource_type):
-                        self._create_threshold_alert(agent, threshold, current_value, resource_type)
+                        self._create_alert(agent, threshold, current_value, resource_type)
                         
             except Exception as e:
                 logger.error(f"Error checking threshold {threshold.name}: {str(e)}")
@@ -828,56 +586,44 @@ class HostMetricViewSet(viewsets.ModelViewSet):
         
         existing_alerts = Alert.objects.filter(
             agent=agent,
-            title=f"{resource_type} threshold exceeded: {threshold.name}",
+            title=f"Resource threshold exceeded: {threshold.name}",
             resolved=False,
             triggered_at__gte=recent_time
         )
         
         return not existing_alerts.exists()
     
-    def _create_threshold_alert(self, agent, threshold, current_value, resource_type):
+    def _create_alert(self, agent, threshold, current_value, resource_type):
         """Create alert and send notifications"""
         alert_level = 'critical' if current_value > 95 else 'high' if current_value > 85 else 'medium'
         
         alert = Alert.objects.create(
             agent=agent,
-            title=f"{resource_type} threshold exceeded: {threshold.name}",
-            description=f"{resource_type} usage {current_value:.1f}% exceeds threshold {threshold.threshold_value}% on {agent.hostname}",
+            title=f"Resource threshold exceeded: {threshold.name}",
+            description=f"{resource_type.upper()} usage {current_value:.1f}% exceeds threshold {threshold.threshold_value}% on {agent.hostname}",
             level=alert_level,
             resolved=False
         )
         
         logger.info(f"Created alert: {alert.title} (Level: {alert.level})")
-
+        
 class ProcessViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['post'])
     def upload_processes(self, request):
         """Handle process list upload from agents"""
+        serializer = ProcessListSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
         try:
-            data = request.data
-            hostname = data.get('hostname')
-            
-            if not hostname:
-                return Response({'error': 'hostname is required'}, status=status.HTTP_400_BAD_REQUEST)
-            
+            data = serializer.validated_data
             # Get agent
-            try:
-                agent = MonitoringAgent.objects.get(hostname=hostname)
-            except MonitoringAgent.DoesNotExist:
-                return Response({'error': 'Agent not found'}, status=status.HTTP_404_NOT_FOUND)
-            
-            # Get process data - support both field names for backward compatibility
-            process_data = data.get('process_system_activity') or data.get('processes')
-            
-            if not process_data:
-                return Response({
-                    'error': 'process_system_activity field is required'
-                }, status=status.HTTP_400_BAD_REQUEST)
+            agent = MonitoringAgent.objects.get(hostname=data['hostname'])
             
             # Save process snapshot
             snapshot = ProcessSnapshot.objects.create(
                 agent=agent,
-                processes=process_data
+                processes=data['processes']
             )
             
             return Response({
@@ -887,10 +633,8 @@ class ProcessViewSet(viewsets.ViewSet):
             
         except Exception as e:
             logger.error(f"Process upload error: {str(e)}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
             return Response(
-                {'error': 'Failed to process process list', 'details': str(e)},
+                {'error': 'Failed to process process list'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -898,68 +642,46 @@ class ProcessViewSet(viewsets.ViewSet):
     def get_processes(self, request):
         """Get current processes for an agent"""
         hostname = request.query_params.get('hostname')
-        agent_id = request.query_params.get('agent_id')
-        
-        if not hostname and not agent_id:
-            return Response({'error': 'hostname or agent_id parameter required'}, status=400)
+        if not hostname:
+            return Response({'error': 'hostname parameter required'}, status=400)
         
         try:
-            if agent_id:
-                agent = MonitoringAgent.objects.get(id=agent_id)
-            else:
-                agent = MonitoringAgent.objects.get(hostname=hostname)
+            agent = MonitoringAgent.objects.get(hostname=hostname)
             
             latest_snapshot = ProcessSnapshot.objects.filter(agent=agent).order_by('-timestamp').first()
             
             if not latest_snapshot:
                 return Response({
-                    'hostname': agent.hostname,
+                    'hostname': hostname,
                     'timestamp': timezone.now().isoformat(),
                     'total_processes': 0,
-                    'root_processes': 0,
                     'page': 1,
                     'page_size': 50,
                     'total_pages': 0,
-                    'top_cpu_processes': [],
-                    'top_memory_processes': [],
-                    'load_average': []
+                    'processes': []
                 })
             
-            processes_data = latest_snapshot.processes
+            processes = latest_snapshot.processes.get('processes', [])
             
-            # Extract process information
-            total_processes = processes_data.get('total_processes', 0)
-            root_processes = processes_data.get('root_processes', 0)
-            top_cpu = processes_data.get('top_cpu_processes', [])
-            top_memory = processes_data.get('top_memory_processes', [])
-            load_avg = processes_data.get('load_average', [])
-            
-            # Pagination for top memory processes
             page = int(request.query_params.get('page', 1))
             page_size = int(request.query_params.get('page_size', 50))
             
             start_idx = (page - 1) * page_size
             end_idx = start_idx + page_size
-            paginated_memory = top_memory[start_idx:end_idx]
+            paginated_processes = processes[start_idx:end_idx]
             
             return Response({
-                'hostname': agent.hostname,
+                'hostname': hostname,
                 'timestamp': latest_snapshot.timestamp,
-                'total_processes': total_processes,
-                'root_processes': root_processes,
+                'total_processes': len(processes),
                 'page': page,
                 'page_size': page_size,
-                'total_pages': (len(top_memory) + page_size - 1) // page_size if top_memory else 0,
-                'top_cpu_processes': top_cpu,
-                'top_memory_processes': paginated_memory,
-                'load_average': load_avg
+                'total_pages': (len(processes) + page_size - 1) // page_size,
+                'processes': paginated_processes
             })
                 
         except MonitoringAgent.DoesNotExist:
             return Response({'error': 'Agent not found'}, status=404)
-        except Exception as e:
-            logger.error(f"Error getting processes: {str(e)}")
-            return Response({'error': str(e)}, status=500)
 
 class ResourceThresholdViewSet(viewsets.ModelViewSet):
     queryset = ResourceThreshold.objects.all()
