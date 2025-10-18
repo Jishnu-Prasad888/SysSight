@@ -51,32 +51,32 @@ This System Monitoring Dashboard is a full-stack application designed to monitor
 
 ### Login Interface
 
-![Login Screen](login.jpeg)
+![Login Screen](demo_images/login.jpeg)
 _Secure login interface with authentication_
 
 ### Main Dashboard
 
-![Dashboard](dashboard.jpeg)
+![Dashboard](demo_images/dashboard.jpeg)
 _Comprehensive overview showing system statistics and agent status_
 
 ### Agent Management
 
-![Agent Manager](agent%20manager.jpeg)
+![Agent Manager](demo_images/agent%20manager.jpeg)
 _Centralized management of all monitoring agents_
 
 ### Metrics Monitoring
 
-![Metrics](metrics.jpeg)
+![Metrics](demo_images/metrics.jpeg)
 _Detailed host metrics and resource usage graphs_
 
 ### Process Monitoring
 
-![Process Monitor](process.jpeg)
+![Process Monitor](demo_images/process.jpeg)
 _Real-time process tracking and resource analysis_
 
 ### Alert Management
 
-![Alerts Panel](alerts.jpeg)
+![Alerts Panel](demo_images/alerts.jpeg)
 _Security alerts and notification management_
 
 ## Technology Stack
