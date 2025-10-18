@@ -2,12 +2,14 @@
 import React, { useState } from 'react';
 import { Shield, Activity, Server, Settings, Bell, User, LogOut, ChevronDown, Menu, X } from 'lucide-react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 
-const Layout = ({ children, user }) => {
+const Layout = ({ children }) => {
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [userMenuOpen, setUserMenuOpen] = useState(false);
     const navigate = useNavigate();
     const location = useLocation();
+    const { user, logout } = useAuth();
 
     const navigation = [
         { id: 'dashboard', name: 'Dashboard', icon: Activity, path: '/dashboard' },
@@ -30,8 +32,7 @@ const Layout = ({ children, user }) => {
     };
 
     const handleLogout = () => {
-        localStorage.removeItem('token');
-        window.location.href = '/login';
+        logout();
     };
 
     const activeTab = getActiveTab();
@@ -53,7 +54,7 @@ const Layout = ({ children, user }) => {
                             </div>
 
                             {/* Desktop Navigation */}
-                            <div className="hidden md:flex md:items-center md:space-x-1 ml-8 pl-37">
+                            <div className="hidden md:flex md:items-center md:space-x-1 ml-8">
                                 {navigation.map((item) => {
                                     const Icon = item.icon;
                                     return (
@@ -85,18 +86,24 @@ const Layout = ({ children, user }) => {
                                         <User className="w-4 h-4 text-blue-600" />
                                     </div>
                                     <div className="hidden sm:block text-left">
-                                        <p className="text-sm font-medium text-gray-900">{user?.username || 'Admin'}</p>
-                                        <p className="text-xs text-gray-500">Administrator</p>
+                                        <p className="text-sm font-medium text-gray-900">
+                                            {user?.first_name && user?.last_name
+                                                ? `${user.first_name} ${user.last_name}`
+                                                : user?.username || 'User'}
+                                        </p>
+                                        <p className="text-xs text-gray-500">{user?.email || ''}</p>
                                     </div>
                                     <ChevronDown className="w-4 h-4 text-gray-400" />
                                 </button>
 
                                 {userMenuOpen && (
                                     <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50">
-                                        <button className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200 flex items-center">
-                                            <User className="w-4 h-4 mr-2" />
-                                            Profile
-                                        </button>
+                                        <div className="px-4 py-2 border-b border-gray-200">
+                                            <p className="text-xs text-gray-500">Signed in as</p>
+                                            <p className="text-sm font-medium text-gray-900 truncate">
+                                                {user?.email}
+                                            </p>
+                                        </div>
                                         <button
                                             onClick={() => handleNavigation('/settings')}
                                             className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors duration-200 flex items-center"

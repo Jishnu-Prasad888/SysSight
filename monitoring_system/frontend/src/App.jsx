@@ -1,8 +1,12 @@
 // src/App.jsx
 import React, { Suspense, lazy } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ErrorBoundary from './components/ErrorBoundary';
 import Layout from './components/Layout';
+import { AuthProvider } from './context/AuthContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import Login from './components/Login';
+import Register from './components/Register';
 import { Loader } from 'lucide-react';
 
 // Lazy load components
@@ -23,12 +27,6 @@ const LoadingFallback = () => (
 );
 
 function App() {
-  const [currentView, setCurrentView] = React.useState('dashboard');
-  const [user] = React.useState({
-    username: 'admin',
-    role: 'Administrator'
-  });
-
   return (
     <ErrorBoundary>
       <BrowserRouter
@@ -37,21 +35,37 @@ function App() {
           v7_relativeSplatPath: true
         }}
       >
-        <Layout activeTab={currentView} onTabChange={setCurrentView} user={user}>
-          <Suspense fallback={<LoadingFallback />}>
-            <Routes>
-              <Route path="/" element={<Dashboard />} />
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/alerts" element={<AlertsPanel />} />
-              <Route path="/agents" element={<AgentRegistrationManager />} />
-              <Route path="/metrics" element={<HostMetrics />} />
-              <Route path="/processes" element={<ProcessMonitor />} />
-              <Route path="/settings" element={<Settings />} />
-              {/* Catch all route */}
-              <Route path="*" element={<Dashboard />} />
-            </Routes>
-          </Suspense>
-        </Layout>
+        <AuthProvider>
+          <Routes>
+            {/* Public Routes */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+
+            {/* Protected Routes */}
+            <Route
+              path="/*"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Suspense fallback={<LoadingFallback />}>
+                      <Routes>
+                        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+                        <Route path="/dashboard" element={<Dashboard />} />
+                        <Route path="/alerts" element={<AlertsPanel />} />
+                        <Route path="/agents" element={<AgentRegistrationManager />} />
+                        <Route path="/metrics" element={<HostMetrics />} />
+                        <Route path="/processes" element={<ProcessMonitor />} />
+                        <Route path="/settings" element={<Settings />} />
+                        {/* Catch all route */}
+                        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+                      </Routes>
+                    </Suspense>
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </AuthProvider>
       </BrowserRouter>
     </ErrorBoundary>
   );
