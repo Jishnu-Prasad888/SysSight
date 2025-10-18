@@ -1,63 +1,59 @@
-// src/App.js
-import React, { useState, useEffect } from 'react';
-import Dashboard from './components/Dashboard';
-import HostMetrics from './components/HostMetrics';
-import ProcessMonitor from './components/ProcessMonitor';
-import AlertsPanel from './components/AlertsPanel';
-import Settings from './components/Settings';
-import Sidebar from './components/Sidebar';
-import { initializeCSRF } from './services/api';
+// src/App.jsx
+import React, { Suspense, lazy } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import ErrorBoundary from './components/ErrorBoundary';
+import Layout from './components/Layout';
+import { Loader } from 'lucide-react';
+
+// Lazy load components
+const Dashboard = lazy(() => import('./components/Dashboard'));
+const AlertsPanel = lazy(() => import('./components/AlertsPanel'));
+const AgentRegistrationManager = lazy(() => import('./components/AgentRegistrationManager'));
+const HostMetrics = lazy(() => import('./components/HostMetrics'));
+const ProcessMonitor = lazy(() => import('./components/ProcessMonitor'));
+const Settings = lazy(() => import('./components/Settings'));
+
+const LoadingFallback = () => (
+  <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+    <div className="text-center">
+      <Loader className="w-8 h-8 text-blue-600 animate-spin mx-auto mb-4" />
+      <p className="text-gray-600">Loading...</p>
+    </div>
+  </div>
+);
 
 function App() {
-  const [currentView, setCurrentView] = useState('dashboard');
-  const [selectedHost, setSelectedHost] = useState('');
-  const [csrfReady, setCsrfReady] = useState(false);
-
-  useEffect(() => {
-    const initApp = async () => {
-      await initializeCSRF();
-      setCsrfReady(true);
-    };
-
-    initApp();
-  }, []);
-
-  const renderContent = () => {
-    switch (currentView) {
-      case 'dashboard':
-        return <Dashboard onHostSelect={setSelectedHost} />;
-      case 'metrics':
-        return <HostMetrics host={selectedHost} />;
-      case 'processes':
-        return <ProcessMonitor host={selectedHost} />;
-      case 'alerts':
-        return <AlertsPanel />;
-      case 'settings':
-        return <Settings />;
-      default:
-        return <Dashboard onHostSelect={setSelectedHost} />;
-    }
-  };
-
-  if (!csrfReady) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-gray-100">
-        <div className="text-lg text-gray-600">Initializing application...</div>
-      </div>
-    );
-  }
+  const [currentView, setCurrentView] = React.useState('dashboard');
+  const [user] = React.useState({
+    username: 'admin',
+    role: 'Administrator'
+  });
 
   return (
-    <div className="flex h-screen bg-gray-100">
-      <Sidebar
-        currentView={currentView}
-        onViewChange={setCurrentView}
-        selectedHost={selectedHost}
-      />
-      <main className="flex-1 overflow-auto">
-        {renderContent()}
-      </main>
-    </div>
+    <ErrorBoundary>
+      <BrowserRouter
+        future={{
+          v7_startTransition: true,
+          v7_relativeSplatPath: true
+        }}
+      >
+        <Layout activeTab={currentView} onTabChange={setCurrentView} user={user}>
+          <Suspense fallback={<LoadingFallback />}>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/alerts" element={<AlertsPanel />} />
+              <Route path="/agents" element={<AgentRegistrationManager />} />
+              <Route path="/metrics" element={<HostMetrics />} />
+              <Route path="/processes" element={<ProcessMonitor />} />
+              <Route path="/settings" element={<Settings />} />
+              {/* Catch all route */}
+              <Route path="*" element={<Dashboard />} />
+            </Routes>
+          </Suspense>
+        </Layout>
+      </BrowserRouter>
+    </ErrorBoundary>
   );
 }
 

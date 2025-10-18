@@ -1,13 +1,14 @@
-// src/components/AlertsPanel.jsx - FIXED BULK DELETE
+// src/components/AlertsPanel.jsx
 import React, { useState, useEffect } from 'react';
 import { getAlerts, resolveAlert, unresolveAlert, deleteAlert, addAlertNote, bulkResolveAlerts, bulkUnresolveAlerts, bulkDeleteAlerts, getAgents } from '../services/api';
 import AlertItem from './AlertItem';
+import { Filter, CheckSquare, Square, RefreshCw, ChevronLeft, ChevronRight, MoreHorizontal } from 'lucide-react';
 
 const AlertsPanel = () => {
     const [alerts, setAlerts] = useState([]);
     const [agents, setAgents] = useState([]);
     const [filters, setFilters] = useState({
-        resolved: '', // Show all alerts by default
+        resolved: '',
         level: '',
         agent: '',
         alert_type: ''
@@ -16,7 +17,6 @@ const AlertsPanel = () => {
     const [selectedAlerts, setSelectedAlerts] = useState(new Set());
     const [bulkAction, setBulkAction] = useState('');
 
-    // Pagination state
     const [pagination, setPagination] = useState({
         current: 1,
         pageSize: 20,
@@ -80,7 +80,6 @@ const AlertsPanel = () => {
     const handleResolveAlert = async (alertId) => {
         try {
             await resolveAlert(alertId);
-            // Update local state for better UX
             setAlerts(prevAlerts =>
                 prevAlerts.map(alert =>
                     alert.id === alertId
@@ -97,7 +96,6 @@ const AlertsPanel = () => {
     const handleUnresolveAlert = async (alertId) => {
         try {
             await unresolveAlert(alertId);
-            // Update local state
             setAlerts(prevAlerts =>
                 prevAlerts.map(alert =>
                     alert.id === alertId
@@ -115,15 +113,12 @@ const AlertsPanel = () => {
         if (window.confirm('Are you sure you want to delete this alert?')) {
             try {
                 await deleteAlert(alertId);
-                // Remove from local state
                 setAlerts(prevAlerts => prevAlerts.filter(alert => alert.id !== alertId));
-                // Also remove from selected alerts
                 setSelectedAlerts(prev => {
                     const newSelected = new Set(prev);
                     newSelected.delete(alertId);
                     return newSelected;
                 });
-                // Update pagination total
                 setPagination(prev => ({
                     ...prev,
                     total: Math.max(0, prev.total - 1)
@@ -138,7 +133,6 @@ const AlertsPanel = () => {
     const handleAddNote = async (alertId, note) => {
         try {
             await addAlertNote(alertId, note);
-            // Reload to get updated notes
             loadAlerts();
         } catch (error) {
             console.error('Failed to add note:', error);
@@ -158,7 +152,6 @@ const AlertsPanel = () => {
 
     const handleSelectAll = (e) => {
         if (e.target.checked) {
-            // Only select alerts on the current page
             setSelectedAlerts(new Set(alerts.map(alert => alert.id)));
         } else {
             setSelectedAlerts(new Set());
@@ -172,8 +165,6 @@ const AlertsPanel = () => {
         }
 
         const alertIds = Array.from(selectedAlerts);
-
-        // Double-check that we're only operating on alerts from the current page
         const currentPageAlertIds = alerts.map(alert => alert.id);
         const validAlertIds = alertIds.filter(id => currentPageAlertIds.includes(id));
 
@@ -190,7 +181,6 @@ const AlertsPanel = () => {
                 case 'resolve':
                     if (window.confirm(`Mark ${validAlertIds.length} alert(s) on this page as resolved?`)) {
                         result = await bulkResolveAlerts(validAlertIds);
-                        // Update local state for resolved alerts on current page
                         setAlerts(prevAlerts =>
                             prevAlerts.map(alert =>
                                 validAlertIds.includes(alert.id)
@@ -204,7 +194,6 @@ const AlertsPanel = () => {
                 case 'unresolve':
                     if (window.confirm(`Mark ${validAlertIds.length} alert(s) on this page as unresolved?`)) {
                         result = await bulkUnresolveAlerts(validAlertIds);
-                        // Update local state for unresolved alerts on current page
                         setAlerts(prevAlerts =>
                             prevAlerts.map(alert =>
                                 validAlertIds.includes(alert.id)
@@ -218,9 +207,7 @@ const AlertsPanel = () => {
                 case 'delete':
                     if (window.confirm(`Delete ${validAlertIds.length} alert(s) from this page? This action cannot be undone.`)) {
                         result = await bulkDeleteAlerts(validAlertIds);
-                        // Remove deleted alerts from local state (current page only)
                         setAlerts(prevAlerts => prevAlerts.filter(alert => !validAlertIds.includes(alert.id)));
-                        // Update pagination total
                         setPagination(prev => ({
                             ...prev,
                             total: Math.max(0, prev.total - validAlertIds.length)
@@ -240,7 +227,6 @@ const AlertsPanel = () => {
         }
     };
 
-    // Pagination handlers
     const handlePageChange = (newPage) => {
         setPagination(prev => ({
             ...prev,
@@ -263,7 +249,6 @@ const AlertsPanel = () => {
         critical: 'red'
     };
 
-    // Generate page numbers for pagination
     const getPageNumbers = () => {
         const pages = [];
         const totalPages = pagination.totalPages;
@@ -300,20 +285,19 @@ const AlertsPanel = () => {
         return pages;
     };
 
-    // Check if all alerts on current page are selected
     const isAllOnCurrentPageSelected = alerts.length > 0 && selectedAlerts.size === alerts.length;
 
     return (
-        <div className="p-6 space-y-6">
-            <div className="flex justify-between items-center">
-                <h1 className="text-2xl font-bold">Alerts</h1>
+        <div className="p-4 md:p-6 space-y-6">
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+                <h1 className="text-2xl font-bold text-gray-900">Alerts</h1>
 
-                <div className="flex space-x-4 items-center">
+                <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto">
                     {/* Page Size Selector */}
                     <select
                         value={pagination.pageSize}
                         onChange={(e) => handlePageSizeChange(e.target.value)}
-                        className="border rounded-lg px-3 py-2 text-sm"
+                        className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                         <option value={10}>10 per page</option>
                         <option value={20}>20 per page</option>
@@ -321,75 +305,69 @@ const AlertsPanel = () => {
                         <option value={100}>100 per page</option>
                     </select>
 
-                    <select
-                        value={filters.level}
-                        onChange={(e) => {
-                            setFilters({ ...filters, level: e.target.value });
-                            setPagination(prev => ({ ...prev, current: 1 }));
-                        }}
-                        className="border rounded-lg px-3 py-2"
-                    >
-                        <option value="">All Levels</option>
-                        <option value="low">Low</option>
-                        <option value="medium">Medium</option>
-                        <option value="high">High</option>
-                        <option value="critical">Critical</option>
-                    </select>
+                    <div className="flex gap-2 flex-wrap">
+                        <select
+                            value={filters.level}
+                            onChange={(e) => {
+                                setFilters({ ...filters, level: e.target.value });
+                                setPagination(prev => ({ ...prev, current: 1 }));
+                            }}
+                            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                            <option value="">All Levels</option>
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                            <option value="critical">Critical</option>
+                        </select>
 
-                    <select
-                        value={filters.alert_type}
-                        onChange={(e) => {
-                            setFilters({ ...filters, alert_type: e.target.value });
-                            setPagination(prev => ({ ...prev, current: 1 }));
-                        }}
-                        className="border rounded-lg px-3 py-2"
-                    >
-                        <option value="">All Types</option>
-                        <option value="process">Process</option>
-                        <option value="network">Network</option>
-                        <option value="authentication">Authentication</option>
-                        <option value="resource">Resource</option>
-                        <option value="security">Security</option>
-                        <option value="system">System</option>
-                    </select>
+                        <select
+                            value={filters.resolved}
+                            onChange={(e) => {
+                                setFilters({ ...filters, resolved: e.target.value });
+                                setPagination(prev => ({ ...prev, current: 1 }));
+                            }}
+                            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                            <option value="">All Status</option>
+                            <option value="false">Unresolved</option>
+                            <option value="true">Resolved</option>
+                        </select>
 
-                    <select
-                        value={filters.agent}
-                        onChange={(e) => {
-                            setFilters({ ...filters, agent: e.target.value });
-                            setPagination(prev => ({ ...prev, current: 1 }));
-                        }}
-                        className="border rounded-lg px-3 py-2"
-                    >
-                        <option value="">All Hosts</option>
-                        {agents.map(agent => (
-                            <option key={agent.id} value={agent.id}>
-                                {agent.hostname}
-                            </option>
-                        ))}
-                    </select>
+                        <select
+                            value={filters.agent}
+                            onChange={(e) => {
+                                setFilters({ ...filters, agent: e.target.value });
+                                setPagination(prev => ({ ...prev, current: 1 }));
+                            }}
+                            className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                            <option value="">All Agents</option>
+                            {agents.map(agent => (
+                                <option key={agent.id} value={agent.id}>
+                                    {agent.hostname}
+                                </option>
+                            ))}
+                        </select>
 
-                    <select
-                        value={filters.resolved}
-                        onChange={(e) => {
-                            setFilters({ ...filters, resolved: e.target.value });
-                            setPagination(prev => ({ ...prev, current: 1 }));
-                        }}
-                        className="border rounded-lg px-3 py-2"
-                    >
-                        <option value="">All Alerts</option>
-                        <option value="false">Unresolved Only</option>
-                        <option value="true">Resolved Only</option>
-                    </select>
+                        <button
+                            onClick={loadAlerts}
+                            disabled={loading}
+                            className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors duration-200 flex items-center gap-2"
+                        >
+                            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+                            Refresh
+                        </button>
+                    </div>
                 </div>
             </div>
 
-            {/* Bulk Actions Toolbar */}
+            {/* Bulk Actions */}
             {alerts.length > 0 && (
-                <div className="bg-gray-50 p-4 rounded-lg border">
-                    <div className="flex items-center justify-between">
-                        <div className="flex items-center space-x-4">
-                            <label className="flex items-center space-x-2">
+                <div className="bg-white border border-gray-200 rounded-lg p-4">
+                    <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                        <div className="flex items-center gap-3">
+                            <label className="flex items-center gap-2">
                                 <input
                                     type="checkbox"
                                     checked={isAllOnCurrentPageSelected}
@@ -397,123 +375,113 @@ const AlertsPanel = () => {
                                     className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                 />
                                 <span className="text-sm text-gray-700">
-                                    Select All on This Page ({selectedAlerts.size} selected)
+                                    Select all on this page ({selectedAlerts.size} selected)
                                 </span>
                             </label>
+                        </div>
 
+                        <div className="flex flex-col sm:flex-row gap-2">
                             <select
                                 value={bulkAction}
                                 onChange={(e) => setBulkAction(e.target.value)}
-                                className="border rounded-lg px-3 py-2 text-sm"
+                                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             >
                                 <option value="">Bulk Actions</option>
-                                <option value="resolve">Mark Resolved</option>
-                                <option value="unresolve">Mark Unresolved</option>
+                                <option value="resolve">Mark as Resolved</option>
+                                <option value="unresolve">Mark as Unresolved</option>
                                 <option value="delete">Delete</option>
                             </select>
 
                             <button
                                 onClick={handleBulkAction}
                                 disabled={!bulkAction || selectedAlerts.size === 0}
-                                className="bg-blue-500 text-white px-4 py-2 rounded text-sm hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
                             >
-                                Apply to Selected ({selectedAlerts.size})
+                                Apply
                             </button>
                         </div>
-
-                        <div className="text-sm text-gray-600">
-                            Page {pagination.current} of {pagination.totalPages} •
-                            Showing {alerts.length} of {pagination.total} alerts
-                            {filters.resolved === 'false' && ' (Unresolved only)'}
-                            {filters.resolved === 'true' && ' (Resolved only)'}
-                        </div>
                     </div>
-
-                    {/* Selection info */}
-                    {selectedAlerts.size > 0 && (
-                        <div className="mt-2 text-xs text-blue-600">
-                            ✓ {selectedAlerts.size} alert(s) selected on this page
-                        </div>
-                    )}
                 </div>
             )}
 
-            {loading ? (
-                <div className="text-center py-8">Loading alerts...</div>
-            ) : alerts.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                    No alerts found
-                    <div className="mt-4 text-sm">
-                        <p>This could mean:</p>
-                        <ul className="list-disc list-inside text-left inline-block mt-2">
-                            <li>No alerts exist in the system</li>
-                            <li>The current filter excludes all alerts</li>
-                            <li>There's an API connection issue</li>
-                        </ul>
+            {/* Alerts List */}
+            <div className="space-y-4">
+                {loading ? (
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500 mx-auto"></div>
+                        <p className="mt-2 text-gray-500">Loading alerts...</p>
+                    </div>
+                ) : alerts.length === 0 ? (
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-8 text-center">
+                        <p className="text-gray-500">No alerts found</p>
+                        <p className="text-sm text-gray-400 mt-1">
+                            {Object.values(filters).some(f => f) ? 'Try adjusting your filters' : 'Alerts will appear here when detected'}
+                        </p>
+                    </div>
+                ) : (
+                    alerts.map(alert => (
+                        <AlertItem
+                            key={alert.id}
+                            alert={alert}
+                            onResolve={handleResolveAlert}
+                            onUnresolve={handleUnresolveAlert}
+                            onDelete={handleDeleteAlert}
+                            onAddNote={handleAddNote}
+                            isSelected={selectedAlerts.has(alert.id)}
+                            onSelect={handleSelectAlert}
+                            levelColors={levelColors}
+                            showCheckbox={true}
+                        />
+                    ))
+                )}
+            </div>
+
+            {/* Pagination */}
+            {pagination.totalPages > 1 && (
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t border-gray-200">
+                    <div className="text-sm text-gray-600">
+                        Showing {((pagination.current - 1) * pagination.pageSize) + 1} to{' '}
+                        {Math.min(pagination.current * pagination.pageSize, pagination.total)} of{' '}
+                        {pagination.total} alerts
+                    </div>
+
+                    <div className="flex items-center space-x-1">
+                        <button
+                            onClick={() => handlePageChange(pagination.current - 1)}
+                            disabled={!pagination.previous}
+                            className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+                        >
+                            <ChevronLeft className="w-4 h-4" />
+                        </button>
+
+                        {getPageNumbers().map((page, index) => (
+                            page === '...' ? (
+                                <span key={`ellipsis-${index}`} className="px-3 py-2 text-gray-500">
+                                    <MoreHorizontal className="w-4 h-4" />
+                                </span>
+                            ) : (
+                                <button
+                                    key={page}
+                                    onClick={() => handlePageChange(page)}
+                                    className={`px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-200 ${pagination.current === page
+                                        ? 'bg-blue-600 text-white'
+                                        : 'border border-gray-300 text-gray-700 hover:bg-gray-50'
+                                        }`}
+                                >
+                                    {page}
+                                </button>
+                            )
+                        ))}
+
+                        <button
+                            onClick={() => handlePageChange(pagination.current + 1)}
+                            disabled={!pagination.next}
+                            className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
+                        >
+                            <ChevronRight className="w-4 h-4" />
+                        </button>
                     </div>
                 </div>
-            ) : (
-                <>
-                    <div className="space-y-4">
-                        {alerts.map(alert => (
-                            <AlertItem
-                                key={alert.id}
-                                alert={alert}
-                                onResolve={handleResolveAlert}
-                                onUnresolve={handleUnresolveAlert}
-                                onDelete={handleDeleteAlert}
-                                onAddNote={handleAddNote}
-                                onSelect={handleSelectAlert}
-                                isSelected={selectedAlerts.has(alert.id)}
-                                showCheckbox={true}
-                                levelColors={levelColors}
-                            />
-                        ))}
-                    </div>
-
-                    {/* Pagination Controls */}
-                    {pagination.totalPages > 1 && (
-                        <div className="flex justify-between items-center pt-4 border-t">
-                            <div className="text-sm text-gray-600">
-                                Showing {(pagination.current - 1) * pagination.pageSize + 1} to{' '}
-                                {Math.min(pagination.current * pagination.pageSize, pagination.total)} of{' '}
-                                {pagination.total} alerts
-                            </div>
-
-                            <div className="flex space-x-2">
-                                <button
-                                    onClick={() => handlePageChange(pagination.current - 1)}
-                                    disabled={pagination.current <= 1}
-                                    className="px-3 py-2 border rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-                                >
-                                    Previous
-                                </button>
-
-                                {getPageNumbers().map((page, index) => (
-                                    <button
-                                        key={index}
-                                        onClick={() => typeof page === 'number' ? handlePageChange(page) : null}
-                                        className={`px-3 py-2 border rounded-lg text-sm min-w-[40px] ${page === pagination.current
-                                                ? 'bg-blue-500 text-white border-blue-500'
-                                                : 'hover:bg-gray-50'
-                                            } ${typeof page !== 'number' ? 'cursor-default hover:bg-transparent' : ''}`}
-                                        disabled={typeof page !== 'number'}
-                                    >
-                                        {page}
-                                    </button>
-                                ))}
-
-                                <button
-                                    onClick={() => handlePageChange(pagination.current + 1)}
-                                    disabled={pagination.current >= pagination.totalPages}
-                                    className="px-3 py-2 border rounded-lg text-sm disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50"
-                                >
-                                    Next
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                </>
             )}
         </div>
     );

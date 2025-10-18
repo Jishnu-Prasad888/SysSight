@@ -1,83 +1,62 @@
-// src/services/api.js
-const API_BASE = "/api";
+import axios from "axios";
 
-// Simple CSRF token getter
-const getCSRFToken = () => {
-  const cookieValue = document.cookie
-    .split("; ")
-    .find((row) => row.startsWith("csrftoken="))
-    ?.split("=")[1];
-  return cookieValue || "";
+// Create axios instance
+const api = axios.create({
+  baseURL: "/api",
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+// CSRF token management
+let csrfToken = null;
+
+export const getCSRFToken = () => {
+  return csrfToken;
 };
 
-// Unified API request handler
-export const apiRequest = async (endpoint, options = {}) => {
-  const url = `${API_BASE}${endpoint}`;
+export const setCSRFToken = (token) => {
+  csrfToken = token;
+  api.defaults.headers.common["X-CSRFToken"] = token;
+};
 
-  const headers = {
-    "Content-Type": "application/json",
-    ...options.headers,
-  };
-
-  const method = options.method ? options.method.toUpperCase() : "GET";
-  if (method !== "GET") {
-    const csrfToken = getCSRFToken();
-    if (csrfToken) {
-      headers["X-CSRFToken"] = csrfToken;
-    }
-  }
-
-  const config = {
-    credentials: "include",
-    ...options,
-    headers,
-  };
-
-  if (config.body && typeof config.body === "object") {
-    config.body = JSON.stringify(config.body);
-  }
-
+// CSRF initialization
+export const initializeCSRF = async () => {
   try {
-    const response = await fetch(url, config);
+    const response = await api.get("/csrf/");
+    const token = response.data.csrfToken;
+    setCSRFToken(token);
+    console.log("CSRF token initialized");
+  } catch (error) {
+    console.error("Failed to initialize CSRF token:", error);
+  }
+};
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`API error: ${response.status} - ${errorText}`);
-    }
+// Unified API request handler using axios
+export const apiRequest = async (endpoint, options = {}) => {
+  try {
+    const config = {
+      url: endpoint,
+      method: options.method || "GET",
+      data: options.body,
+      ...options,
+    };
 
-    if (response.status === 204) {
-      return null;
-    }
-
-    return await response.json();
+    const response = await api(config);
+    return response.data;
   } catch (error) {
     console.error("API request failed:", error);
     throw error;
   }
 };
 
-// Response handler for fetch requests
-const handleResponse = async (response) => {
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
-  }
-
-  if (response.status === 204) {
-    return { status: "success" };
-  }
-
-  return response.json();
-};
-
 // Debug utilities
 export const debugAPI = {
   getAgents: async () => {
     try {
-      const response = await fetch("/api/agents/");
-      const data = await response.json();
-      console.log("Raw agents response:", data);
-      return data;
+      const response = await api.get("/agents/");
+      console.log("Raw agents response:", response.data);
+      return response.data;
     } catch (error) {
       console.error("Debug agents error:", error);
       throw error;
@@ -86,10 +65,9 @@ export const debugAPI = {
 
   getStats: async () => {
     try {
-      const response = await fetch("/api/agents/stats/");
-      const data = await response.json();
-      console.log("Raw stats response:", data);
-      return data;
+      const response = await api.get("/agents/stats/");
+      console.log("Raw stats response:", response.data);
+      return response.data;
     } catch (error) {
       console.error("Debug stats error:", error);
       throw error;
@@ -100,8 +78,8 @@ export const debugAPI = {
 // Agents
 export const getAgents = async () => {
   try {
-    const response = await fetch("/api/agents/");
-    const data = await handleResponse(response);
+    const response = await api.get("/agents/");
+    const data = response.data;
 
     // Ensure we always return an array
     if (Array.isArray(data)) {
@@ -123,7 +101,6 @@ export const getAgents = async () => {
 export const getAgentStats = () => apiRequest("/agents/stats/");
 
 // Metrics
-// services/api.js
 export const getMetrics = async (params = {}) => {
   try {
     const cleanParams = {};
@@ -137,13 +114,13 @@ export const getMetrics = async (params = {}) => {
       }
     });
 
-    const queryString = new URLSearchParams(cleanParams).toString();
     console.log("🔍 API Request Params:", cleanParams);
-    console.log("🔍 Full API URL:", `/metrics/?${queryString}`);
+    console.log("🔍 Full API URL:", `/metrics/`);
 
-    const data = await apiRequest(`/metrics/?${queryString}`);
-    console.log("🔍 API Response:", data);
+    const response = await api.get("/metrics/", { params: cleanParams });
+    const data = response.data;
 
+    // console.log("🔍 API Response:", data);
     return Array.isArray(data) ? data : [];
   } catch (error) {
     console.error("Error fetching metrics:", error);
@@ -151,13 +128,54 @@ export const getMetrics = async (params = {}) => {
   }
 };
 
+// Agent Registration Management
+export const getPendingRegistrations = async () => {
+  try {
+    console.log("🔍 API Call - getPendingRegistrations");
+    const response = await api.get("/registrations/pending/");
+    console.log("🔍 API Response - getPendingRegistrations:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("🔍 API Error - getPendingRegistrations:", error);
+    return [];
+  }
+};
+
+export const approveRegistration = async (requestId) => {
+  try {
+    const response = await api.post(`/registrations/${requestId}/approve/`);
+    return response.data;
+  } catch (error) {
+    console.error("Approval API error:", error);
+    throw error;
+  }
+};
+
+export const rejectRegistration = async (requestId, data) => {
+  try {
+    const response = await api.post(
+      `/registrations/${requestId}/reject/`,
+      data
+    );
+    return response.data;
+  } catch (error) {
+    console.error("Rejection API error:", error);
+    throw error;
+  }
+};
+
+export const getRegistrationRequests = async () => {
+  const response = await api.get("//");
+  return response.data;
+};
+
 // Processes
 export const getProcesses = async (hostname, page = 1, pageSize = 50) => {
   try {
-    const response = await fetch(
-      `/api/processes/list/?hostname=${hostname}&page=${page}&page_size=${pageSize}`
-    );
-    return await handleResponse(response);
+    const response = await api.get("/processes/list/", {
+      params: { hostname, page, page_size: pageSize },
+    });
+    return response.data;
   } catch (error) {
     console.error("Error fetching processes:", error);
     return {
@@ -176,35 +194,26 @@ export const getProcesses = async (hostname, page = 1, pageSize = 50) => {
 };
 
 // Alerts
-// src/services/api.js - Update getAlerts function
 export const getAlerts = async (filters = {}, page = 1, pageSize = 20) => {
   try {
     console.log("🔄 Fetching alerts with filters:", filters, "page:", page);
-    const params = new URLSearchParams();
 
-    if (filters.resolved !== undefined) {
-      params.append("resolved", filters.resolved);
-    }
-    if (filters.level) {
-      params.append("level", filters.level);
-    }
-    if (filters.agent) {
-      params.append("agent", filters.agent);
-    }
-    if (filters.alert_type) {
-      params.append("alert_type", filters.alert_type);
-    }
+    const params = {
+      page,
+      page_size: pageSize,
+      ...filters,
+    };
 
-    // Add pagination parameters
-    params.append("page", page);
-    params.append("page_size", pageSize);
+    // Remove undefined values
+    Object.keys(params).forEach((key) => {
+      if (params[key] === undefined || params[key] === null) {
+        delete params[key];
+      }
+    });
 
-    const queryString = params.toString();
-    const url = queryString ? `/api/alerts/?${queryString}` : "/api/alerts/";
-
-    console.log(`📡 Fetching from: ${url}`);
-    const response = await fetch(url);
-    const data = await handleResponse(response);
+    console.log(`📡 Fetching alerts with params:`, params);
+    const response = await api.get("/alerts/", { params });
+    const data = response.data;
 
     // Handle paginated response
     if (data && data.results !== undefined) {
@@ -265,93 +274,69 @@ export const getAlerts = async (filters = {}, page = 1, pageSize = 20) => {
 };
 
 export const resolveAlert = async (alertId) => {
-  const response = await fetch(`/api/alerts/${alertId}/resolve/`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": getCSRFToken(),
-    },
-  });
-  return handleResponse(response);
+  const response = await api.post(`/alerts/${alertId}/resolve/`);
+  return response.data;
 };
 
 export const unresolveAlert = async (alertId) => {
-  const response = await fetch(`/api/alerts/${alertId}/unresolve/`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": getCSRFToken(),
-    },
-  });
-  return handleResponse(response);
+  const response = await api.post(`/alerts/${alertId}/unresolve/`);
+  return response.data;
 };
 
 export const deleteAlert = async (alertId) => {
-  const response = await fetch(`/api/alerts/${alertId}/`, {
-    method: "DELETE",
-    headers: {
-      "X-CSRFToken": getCSRFToken(),
-    },
-  });
-  return handleResponse(response);
+  const response = await api.delete(`/alerts/${alertId}/`);
+  return response.data;
 };
 
 export const addAlertNote = async (alertId, note) => {
-  const response = await fetch(`/api/alerts/${alertId}/add_note/`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": getCSRFToken(),
-    },
-    body: JSON.stringify({ note }),
-  });
-  return handleResponse(response);
+  const response = await api.post(`/alerts/${alertId}/add_note/`, { note });
+  return response.data;
 };
 
 // Bulk operations
 export const bulkResolveAlerts = async (alertIds) => {
-  const response = await fetch("/api/alerts/bulk_resolve/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": getCSRFToken(),
-    },
-    body: JSON.stringify({ alert_ids: alertIds }),
+  const response = await api.post("/alerts/bulk_resolve/", {
+    alert_ids: alertIds,
   });
-  return handleResponse(response);
+  return response.data;
 };
 
 export const bulkUnresolveAlerts = async (alertIds) => {
-  const response = await fetch("/api/alerts/bulk_unresolve/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": getCSRFToken(),
-    },
-    body: JSON.stringify({ alert_ids: alertIds }),
+  const response = await api.post("/alerts/bulk_unresolve/", {
+    alert_ids: alertIds,
   });
-  return handleResponse(response);
+  return response.data;
 };
 
 export const bulkDeleteAlerts = async (alertIds) => {
-  const response = await fetch("/api/alerts/bulk_delete/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-CSRFToken": getCSRFToken(),
-    },
-    body: JSON.stringify({ alert_ids: alertIds }),
+  const response = await api.post("/alerts/bulk_delete/", {
+    alert_ids: alertIds,
   });
-  return handleResponse(response);
+  return response.data;
 };
 
 // Stats
-export const getStats = () => apiRequest("/agents/stats/");
+export const getStats = async () => {
+  try {
+    const response = await api.get("/agents/stats/");
+    return response.data;
+  } catch (error) {
+    console.error("Error fetching stats:", error);
+    return {
+      total_agents: 0,
+      active_agents: 0,
+      pending_registrations: 0,
+      recent_logs_count: 0,
+      alerts_count: 0,
+    };
+  }
+};
 
 // Settings
 export const getThresholds = async () => {
   try {
-    const data = await apiRequest("/thresholds/");
+    const response = await api.get("/thresholds/");
+    const data = response.data;
     return Array.isArray(data) ? data : [];
   } catch (error) {
     console.error("Error fetching thresholds:", error);
@@ -370,7 +355,8 @@ export const deleteThreshold = (id) =>
 
 export const getNotificationChannels = async () => {
   try {
-    const data = await apiRequest("/notifications/");
+    const response = await api.get("/notifications/");
+    const data = response.data;
     return Array.isArray(data) ? data : [];
   } catch (error) {
     console.error("Error fetching notification channels:", error);
@@ -386,18 +372,3 @@ export const updateNotificationChannel = (id, data) =>
 
 export const deleteNotificationChannel = (id) =>
   apiRequest(`/notifications/${id}/`, { method: "DELETE" });
-
-// Initialize CSRF token
-export const initializeCSRF = async () => {
-  try {
-    await apiRequest("/csrf/");
-    console.log("CSRF token initialized");
-    return true;
-  } catch (error) {
-    console.warn("CSRF initialization failed, continuing without CSRF:", error);
-    return true;
-  }
-};
-
-// Export CSRF token getter for other modules
-export const getCsrfToken = getCSRFToken;

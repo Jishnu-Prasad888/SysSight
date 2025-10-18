@@ -5,6 +5,7 @@ const Sidebar = ({ currentView, onViewChange, selectedHost }) => {
     const menuItems = [
         { id: 'dashboard', label: 'Dashboard', icon: '📊' },
         { id: 'metrics', label: 'Host Metrics', icon: '📈' },
+        { id: 'agents', label: 'Agent Management', icon: '🖥️' },
         { id: 'processes', label: 'Process Monitor', icon: '⚙️' },
         { id: 'alerts', label: 'Alerts', icon: '🚨' },
         { id: 'settings', label: 'Settings', icon: '⚙️' },
