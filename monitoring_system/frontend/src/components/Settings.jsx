@@ -1,12 +1,17 @@
 // src/components/Settings.js
 import React, { useState, useEffect } from 'react';
 import { getThresholds, createThreshold, updateThreshold, deleteThreshold, getNotificationChannels, createNotificationChannel, updateNotificationChannel, deleteNotificationChannel } from '../services/api';
+import { initializeCSRF } from "../services/api";
 
 const Settings = () => {
     const [activeTab, setActiveTab] = useState('thresholds');
     const [thresholds, setThresholds] = useState([]);
     const [notificationChannels, setNotificationChannels] = useState([]);
     const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        initializeCSRF();
+    }, []);
 
     useEffect(() => {
         loadData();
@@ -45,8 +50,8 @@ const Settings = () => {
                             key={tab.id}
                             onClick={() => setActiveTab(tab.id)}
                             className={`py-2 px-1 border-b-2 font-medium text-sm ${activeTab === tab.id
-                                    ? 'border-blue-500 text-blue-600'
-                                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                                ? 'border-blue-500 text-blue-600'
+                                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                                 }`}
                         >
                             <span className="mr-2">{tab.icon}</span>
@@ -296,8 +301,8 @@ const ThresholdSettings = ({ thresholds, onThresholdsChange }) => {
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <span className={`px-2 py-1 text-xs rounded-full ${threshold.is_active
-                                            ? 'bg-green-100 text-green-800'
-                                            : 'bg-gray-100 text-gray-800'
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-gray-100 text-gray-800'
                                         }`}>
                                         {threshold.is_active ? 'Active' : 'Inactive'}
                                     </span>
@@ -579,8 +584,8 @@ const NotificationSettings = ({ channels, onChannelsChange }) => {
                                 </td>
                                 <td className="px-6 py-4 whitespace-nowrap">
                                     <span className={`px-2 py-1 text-xs rounded-full ${channel.is_active
-                                            ? 'bg-green-100 text-green-800'
-                                            : 'bg-gray-100 text-gray-800'
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-gray-100 text-gray-800'
                                         }`}>
                                         {channel.is_active ? 'Active' : 'Inactive'}
                                     </span>

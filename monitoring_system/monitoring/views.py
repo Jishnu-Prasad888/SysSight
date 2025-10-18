@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from django.utils import timezone
 from django.db.models import Count, Q
 from django.shortcuts import get_object_or_404
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAdminUser
 from .models import MonitoringAgent, SystemLog, Alert, UserSession, AgentRegistrationRequest, HostMetric, ProcessSnapshot, ResourceThreshold, NotificationChannel
 from .serializers import *
 from .utils import EncryptionManager, AlertGenerator
@@ -30,6 +31,12 @@ logger = logging.getLogger(__name__)
 class MonitoringAgentViewSet(viewsets.ModelViewSet):
     queryset = MonitoringAgent.objects.all()
     serializer_class = MonitoringAgentSerializer
+    
+    def get_permissions(self):
+        """Allow agents to check config without frontend authentication"""
+        if self.action == 'config_by_hostname':
+            return [AllowAny()]
+        return [IsAuthenticated()]
     
     @action(detail=False, methods=['get'])
     def stats(self, request):
@@ -62,6 +69,83 @@ class MonitoringAgentViewSet(viewsets.ModelViewSet):
                 'alerts_count': 0,
                 'error': str(e)
             })
+
+    @action(detail=True, methods=['post'])
+    def approve(self, request, pk=None):
+        """Approve an agent (for re-approving disapproved agents)"""
+        agent = self.get_object()
+
+        try:
+            # Approve and activate the agent
+            agent.is_approved = True
+            agent.is_active = True
+            agent.save()
+
+            logger.info(f"Agent {agent.hostname} approved")
+
+            # Optionally create an Alert
+            from .models import Alert
+            Alert.objects.create(
+                agent=agent,
+                title=f"Agent Approved: {agent.hostname}",
+                description=f"Agent has been approved and activated.",
+                level='low',
+                alert_type='system'
+            )
+
+            return Response({
+                'status': 'approved',
+                'message': 'Agent has been approved and activated',
+                'agent_id': agent.id
+            })
+
+        except Exception as e:
+            logger.error(f"Agent approval error: {str(e)}")
+            return Response(
+                {'error': 'Approval failed', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+            
+            
+            
+    @action(detail=True, methods=['post'])
+    def disapprove(self, request, pk=None):
+        """Disapprove and deactivate an agent"""
+        agent = self.get_object()
+        reason = request.data.get('reason', '')
+
+        try:
+            # Deactivate the agent but keep it in the system
+            agent.is_approved = False  # Set to pending approval
+            agent.is_active = False     # Deactivate it
+            agent.save()
+
+            # Optionally log the reason
+            logger.info(f"Agent {agent.hostname} disapproved. Reason: {reason}")
+
+            # Create an Alert for tracking
+            from .models import Alert
+            Alert.objects.create(
+                agent=agent,
+                title=f"Agent Disapproved: {agent.hostname}",
+                description=f"Agent was disapproved and requires re-approval. Reason: {reason}",
+                level='medium',
+                alert_type='system'
+            )
+
+            return Response({
+                'status': 'disapproved',
+                'message': 'Agent has been disapproved and set to pending approval',
+                'agent_id': agent.id
+            })
+
+        except Exception as e:
+            logger.error(f"Disapproval error: {str(e)}")
+            return Response(
+                {'error': 'Disapproval failed', 'details': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     
     @action(detail=True, methods=['post'])
     def activate(self, request, pk=None):
@@ -79,13 +163,13 @@ class MonitoringAgentViewSet(viewsets.ModelViewSet):
         agent.save()
         return Response({'status': 'agent deactivated'})
     
-    @action(detail=True, methods=['post'])
-    def approve(self, request, pk=None):
-        """Approve an agent registration"""
-        agent = self.get_object()
-        agent.is_approved = True
-        agent.save()
-        return Response({'status': 'agent approved'})
+    # @action(detail=True, methods=['post'])
+    # def approve(self, request, pk=None):
+    #     """Approve an agent registration"""
+    #     agent = self.get_object()
+    #     agent.is_approved = True
+    #     agent.save()
+    #     return Response({'status': 'agent approved'})
     
     @action(detail=True, methods=['get'])
     def config(self, request, pk=None):
@@ -125,6 +209,34 @@ class AgentRegistrationViewSet(viewsets.ModelViewSet):
     queryset = AgentRegistrationRequest.objects.all().order_by('-requested_at')
     serializer_class = AgentRegistrationRequestSerializer
     
+    def get_permissions(self):
+        """Allow unauthenticated access only for registration creation"""
+        if self.action in ['create']:
+            return [AllowAny()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        """Filter queryset based on user permissions"""
+        queryset = super().get_queryset()
+
+        # Staff users can see all requests
+        if self.request.user.is_staff:
+            return queryset
+
+        # Authenticated non-staff users can see pending requests
+        if self.request.user.is_authenticated:
+            return queryset.filter(status='pending')
+
+        # Unauthenticated users see nothing
+        return queryset.none()
+    
+    @action(detail=False, methods=['get'])
+    def pending(self, request):
+        """Get pending registration requests"""
+        pending_requests = AgentRegistrationRequest.objects.filter(status='pending')
+        serializer = self.get_serializer(pending_requests, many=True)
+        return Response(serializer.data)
+
     def create(self, request):
         """Handle new agent registration"""
         serializer = RegistrationSerializer(data=request.data)
@@ -220,17 +332,24 @@ class AgentRegistrationViewSet(viewsets.ModelViewSet):
         registration.save()
         
         return Response({'status': 'rejected'})
-    
-    @action(detail=False, methods=['get'])
-    def pending(self, request):
-        """Get pending registration requests"""
-        pending_requests = AgentRegistrationRequest.objects.filter(status='pending')
-        serializer = self.get_serializer(pending_requests, many=True)
-        return Response(serializer.data)
 
 class SystemLogViewSet(viewsets.ModelViewSet):
     queryset = SystemLog.objects.all().order_by('-timestamp')
     serializer_class = SystemLogSerializer
+    
+    def get_permissions(self):
+        """Customize permissions per action"""
+        if self.action in ['upload_logs', 'create']:
+            # Allow anyone to upload logs or create
+            permission_classes = [AllowAny]
+        elif self.action in ['list', 'retrieve', 'update', 'partial_update', 'destroy']:
+            # Restrict these actions to admins
+            permission_classes = [IsAdminUser]
+        else:
+            # Default fallback — authenticated users only
+            permission_classes = [IsAuthenticated]
+
+        return [permission() for permission in permission_classes]
     
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -930,6 +1049,12 @@ class HostMetricViewSet(viewsets.ModelViewSet):
     serializer_class = HostMetricSerializer
     pagination_class = None
     
+    def get_permissions(self):
+        """Allow agents to upload metrics without frontend authentication"""
+        if self.action == 'upload_metrics':
+            return [AllowAny()]
+        return [IsAuthenticated()]
+    
     # In your HostMetricViewSet, enhance the get_queryset method:
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -995,10 +1120,6 @@ class HostMetricViewSet(viewsets.ModelViewSet):
         
         try:
             data = serializer.validated_data
-            
-            print(Fore.YELLOW + "VALIDATED DATA")
-            print(Fore.GREEN + f"{data}")
-            print(Fore.GREEN + "VALIDATED DATA END")
             
             # Get agent
             try:
@@ -1099,6 +1220,12 @@ class HostMetricViewSet(viewsets.ModelViewSet):
         logger.info(f"Created alert: {alert.title} (Level: {alert.level})")
 
 class ProcessViewSet(viewsets.ViewSet):
+    def get_permissions(self):
+        """Allow agents to upload processes without frontend authentication"""
+        if self.action == 'upload_processes':
+            return [AllowAny()]
+        return [IsAuthenticated()]
+    
     @action(detail=False, methods=['post'])
     def upload_processes(self, request):
         """Handle process list upload from agents"""
@@ -1213,7 +1340,16 @@ class ProcessViewSet(viewsets.ViewSet):
 class ResourceThresholdViewSet(viewsets.ModelViewSet):
     queryset = ResourceThreshold.objects.all()
     serializer_class = ResourceThresholdSerializer
+    permission_classes = [IsAuthenticated]
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        print(">>> Thresholds returned by GET:", serializer.data)  # 👈 Log data to console
+        return Response(serializer.data)
+
 
 class NotificationChannelViewSet(viewsets.ModelViewSet):
     queryset = NotificationChannel.objects.all()
     serializer_class = NotificationChannelSerializer
+    permission_classes = [IsAuthenticated]

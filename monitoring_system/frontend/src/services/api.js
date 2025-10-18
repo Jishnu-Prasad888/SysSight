@@ -1,8 +1,11 @@
 import axios from "axios";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || "/api";
+
 // Create axios instance
 const api = axios.create({
-  baseURL: "/api",
+  baseURL: API_BASE_URL,
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
@@ -12,13 +15,81 @@ const api = axios.create({
 let csrfToken = null;
 
 export const getCSRFToken = () => {
+  if (!csrfToken) {
+    csrfToken =
+      document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("csrftoken="))
+        ?.split("=")[1] || null;
+  }
   return csrfToken;
 };
 
 export const setCSRFToken = (token) => {
   csrfToken = token;
-  api.defaults.headers.common["X-CSRFToken"] = token;
 };
+
+// Add JWT token and CSRF token to requests
+api.interceptors.request.use(
+  (config) => {
+    // Add JWT token from sessionStorage
+    const token = sessionStorage.getItem("access_token");
+    if (token) {
+      config.headers["Authorization"] = `Bearer ${token}`;
+    }
+
+    // Add CSRF token
+    const csrf = getCSRFToken();
+    if (csrf) {
+      config.headers["X-CSRFToken"] = csrf;
+    }
+
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Add response interceptor to handle 401 errors
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // If 401 and we haven't tried to refresh yet
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        const refreshToken = sessionStorage.getItem("refresh_token");
+
+        if (refreshToken) {
+          // Try to refresh the token
+          const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, {
+            refresh: refreshToken,
+          });
+
+          const { access } = response.data;
+          sessionStorage.setItem("access_token", access);
+
+          // Retry the original request with new token
+          originalRequest.headers["Authorization"] = `Bearer ${access}`;
+          return api(originalRequest);
+        }
+      } catch (refreshError) {
+        // Refresh failed, redirect to login
+        sessionStorage.removeItem("access_token");
+        sessionStorage.removeItem("refresh_token");
+        sessionStorage.removeItem("user");
+        window.location.href = "/login";
+        return Promise.reject(refreshError);
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 // CSRF initialization
 export const initializeCSRF = async () => {
@@ -32,7 +103,7 @@ export const initializeCSRF = async () => {
   }
 };
 
-// Unified API request handler using axios
+// Unified API request handler
 export const apiRequest = async (endpoint, options = {}) => {
   try {
     const config = {
@@ -81,7 +152,6 @@ export const getAgents = async () => {
     const response = await api.get("/agents/");
     const data = response.data;
 
-    // Ensure we always return an array
     if (Array.isArray(data)) {
       return data;
     } else if (data && data.results) {
@@ -114,13 +184,11 @@ export const getMetrics = async (params = {}) => {
       }
     });
 
-    console.log("🔍 API Request Params:", cleanParams);
-    console.log("🔍 Full API URL:", `/metrics/`);
+    console.log("📊 API Request Params:", cleanParams);
 
     const response = await api.get("/metrics/", { params: cleanParams });
     const data = response.data;
 
-    // console.log("🔍 API Response:", data);
     return Array.isArray(data) ? data : [];
   } catch (error) {
     console.error("Error fetching metrics:", error);
@@ -131,12 +199,12 @@ export const getMetrics = async (params = {}) => {
 // Agent Registration Management
 export const getPendingRegistrations = async () => {
   try {
-    console.log("🔍 API Call - getPendingRegistrations");
+    console.log("📡 API Call - getPendingRegistrations");
     const response = await api.get("/registrations/pending/");
-    console.log("🔍 API Response - getPendingRegistrations:", response.data);
+    console.log("📊 API Response - getPendingRegistrations:", response.data);
     return response.data;
   } catch (error) {
-    console.error("🔍 API Error - getPendingRegistrations:", error);
+    console.error("❌ API Error - getPendingRegistrations:", error);
     return [];
   }
 };
@@ -165,7 +233,7 @@ export const rejectRegistration = async (requestId, data) => {
 };
 
 export const getRegistrationRequests = async () => {
-  const response = await api.get("//");
+  const response = await api.get("/registrations/");
   return response.data;
 };
 
@@ -196,7 +264,7 @@ export const getProcesses = async (hostname, page = 1, pageSize = 50) => {
 // Alerts
 export const getAlerts = async (filters = {}, page = 1, pageSize = 20) => {
   try {
-    console.log("🔄 Fetching alerts with filters:", filters, "page:", page);
+    console.log("📄 Fetching alerts with filters:", filters, "page:", page);
 
     const params = {
       page,
@@ -204,7 +272,6 @@ export const getAlerts = async (filters = {}, page = 1, pageSize = 20) => {
       ...filters,
     };
 
-    // Remove undefined values
     Object.keys(params).forEach((key) => {
       if (params[key] === undefined || params[key] === null) {
         delete params[key];
@@ -215,7 +282,6 @@ export const getAlerts = async (filters = {}, page = 1, pageSize = 20) => {
     const response = await api.get("/alerts/", { params });
     const data = response.data;
 
-    // Handle paginated response
     if (data && data.results !== undefined) {
       console.log(
         `✅ Found ${data.results.length} alerts on page ${page} of ${data.count} total`
@@ -232,7 +298,6 @@ export const getAlerts = async (filters = {}, page = 1, pageSize = 20) => {
         },
       };
     } else {
-      // Fallback for non-paginated responses
       let alertsArray = [];
       if (Array.isArray(data)) {
         alertsArray = data;
@@ -344,14 +409,35 @@ export const getThresholds = async () => {
   }
 };
 
-export const createThreshold = (data) =>
-  apiRequest("/thresholds/", { method: "POST", body: data });
+export const createThreshold = async (data) => {
+  try {
+    const response = await api.post("/thresholds/", data);
+    return response.data;
+  } catch (error) {
+    console.error("Error creating threshold:", error);
+    throw error;
+  }
+};
 
-export const updateThreshold = (id, data) =>
-  apiRequest(`/thresholds/${id}/`, { method: "PUT", body: data });
+export const updateThreshold = async (id, data) => {
+  try {
+    const response = await api.put(`/thresholds/${id}/`, data);
+    return response.data;
+  } catch (error) {
+    console.error("Error updating threshold:", error);
+    throw error;
+  }
+};
 
-export const deleteThreshold = (id) =>
-  apiRequest(`/thresholds/${id}/`, { method: "DELETE" });
+export const deleteThreshold = async (id) => {
+  try {
+    const response = await api.delete(`/thresholds/${id}/`);
+    return response.data;
+  } catch (error) {
+    console.error("Error deleting threshold:", error);
+    throw error;
+  }
+};
 
 export const getNotificationChannels = async () => {
   try {
@@ -364,11 +450,52 @@ export const getNotificationChannels = async () => {
   }
 };
 
-export const createNotificationChannel = (data) =>
-  apiRequest("/notifications/", { method: "POST", body: data });
+export const createNotificationChannel = async (data) => {
+  try {
+    const response = await api.post("/notifications/", data);
+    return response.data;
+  } catch (error) {
+    console.error("Error creating notification channel:", error);
+    throw error;
+  }
+};
 
-export const updateNotificationChannel = (id, data) =>
-  apiRequest(`/notifications/${id}/`, { method: "PUT", body: data });
+export const updateNotificationChannel = async (id, data) => {
+  try {
+    const response = await api.put(`/notifications/${id}/`, data);
+    return response.data;
+  } catch (error) {
+    console.error("Error updating notification channel:", error);
+    throw error;
+  }
+};
 
-export const deleteNotificationChannel = (id) =>
-  apiRequest(`/notifications/${id}/`, { method: "DELETE" });
+export const deleteNotificationChannel = async (id) => {
+  try {
+    const response = await api.delete(`/notifications/${id}/`);
+    return response.data;
+  } catch (error) {
+    console.error("Error deleting notification channel:", error);
+    throw error;
+  }
+};
+
+export const disapproveAgent = async (agentId, data) => {
+  try {
+    const response = await api.post(`/agents/${agentId}/disapprove/`, data);
+    return response.data;
+  } catch (error) {
+    console.error("Disapprove API error:", error);
+    throw error;
+  }
+};
+
+export const approveAgent = async (agentId) => {
+  try {
+    const response = await api.post(`/agents/${agentId}/approve/`);
+    return response.data;
+  } catch (error) {
+    console.error("Approve agent API error:", error);
+    throw error;
+  }
+};
